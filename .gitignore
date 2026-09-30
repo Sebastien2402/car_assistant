@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Audio generated during tests
+*.wav
+*.mp3
+
+# Temporary files
+tmp/
+temp/
+
+# Python cache
+.pytest_cache/
+
+# Logs
+*.log
+
+# Piper voice models
+voices/*.onnx
+voices/
