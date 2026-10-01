@@ -1,0 +1,6 @@
+faster_whisper==1.2.1
+numpy==2.5.3
+ollama==0.6.3
+Requests==2.34.2
+soundfile==0.14.0
+webrtcvad_wheels==2.0.14

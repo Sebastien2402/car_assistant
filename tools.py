@@ -1,5 +1,9 @@
+import json
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from math import radians, sin, cos, asin, sqrt
+
 import requests
 
 UA = {"User-Agent": "copilote-vocal-proto/0.1 (projet perso)"}
@@ -20,13 +24,21 @@ CATEGORIES = {
 }
 
 # --- Réglages ---
+DEBUG = True            # affiche le temps de chaque étape
 REVERSE_GEOCODE = True  # False = plus rapide, mais certaines options sans adresse
 TRANCHES = [("début", 0.05, 0.35), ("milieu", 0.35, 0.65), ("fin", 0.65, 0.90)]
-PAR_TRANCHE = 4  # candidats gardés par tranche avant le calcul des détours
+PAR_TRANCHE = 4         # candidats gardés par tranche avant le calcul des détours
+CACHE_FILE = ".cache/places.json"
+CACHE_TTL = 24 * 3600
 
 STATE = {}  # dernière recherche, pour valider un choix ensuite
 _GEO_CACHE = {}
 _last_nominatim = 0.0
+
+
+def _log(label, t0):
+    if DEBUG:
+        print(f"   [{label} : {time.time() - t0:.1f} s]")
 
 
 def _dist_m(a, b):
@@ -35,6 +47,34 @@ def _dist_m(a, b):
     return 2 * 6371000 * asin(sqrt(h))
 
 
+# ---------- Cache disque ----------
+def _cache_get(key):
+    try:
+        with open(CACHE_FILE, encoding="utf-8") as f:
+            entry = json.load(f).get(key)
+        if entry and time.time() - entry["t"] < CACHE_TTL:
+            return entry["places"]
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+
+def _cache_set(key, places):
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+        try:
+            with open(CACHE_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        data[key] = {"t": time.time(), "places": places}
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+# ---------- Nominatim ----------
 def _nominatim(path, params):
     """Appel Nominatim avec respect de la limite d'une requête par seconde."""
     global _last_nominatim
@@ -70,6 +110,7 @@ def reverse_address(lat, lon):
     return ", ".join(filter(None, [street, city]))
 
 
+# ---------- OSRM ----------
 def route(points):
     """points: liste de (lat, lon). Retourne (durée_s, distance_m, tracé)."""
     coords = ";".join(f"{lon},{lat}" for lat, lon in points)
@@ -93,55 +134,75 @@ def durations_matrix(points):
     return r.json()["durations"]
 
 
+# ---------- Overpass ----------
 def _osm_address(tags):
     street = " ".join(filter(None, [tags.get("addr:housenumber"), tags.get("addr:street")]))
     return ", ".join(filter(None, [street, tags.get("addr:city", "")]))
 
 
+def _overpass_query(query, first_server):
+    """Essaie les serveurs à tour de rôle (en commençant par first_server), délai court."""
+    servers = OVERPASS_SERVERS[first_server:] + OVERPASS_SERVERS[:first_server]
+    for server in servers:
+        t0 = time.time()
+        host = server.split("/")[2]
+        try:
+            r = requests.post(server, data={"data": query}, headers=UA, timeout=(5, 14))
+            r.raise_for_status()
+            data = r.json()
+            if data.get("remark") and not data.get("elements"):
+                raise ValueError(data["remark"])
+            _log(f"overpass {host} ok", t0)
+            return data
+        except (requests.RequestException, ValueError) as e:
+            _log(f"overpass {host} échec ({type(e).__name__})", t0)
+    return None
+
+
 def places_along(line, category, radius=1500, n_points=12):
     key, value = CATEGORIES[category]
-    step = max(1, len(line) // n_points)
-    sampled = line[::step]
-    poly = ",".join(f"{lat:.5f},{lon:.5f}" for lat, lon in sampled)
-    query = f'[out:json][timeout:20];nwr["{key}"="{value}"](around:{radius},{poly});out center 60;'
+    sampled = line[::max(1, len(line) // n_points)]
+    n = len(sampled)
 
-    data = None
-    for attempt in range(2):
-        for server in OVERPASS_SERVERS:
-            try:
-                r = requests.post(server, data={"data": query}, headers=UA, timeout=30)
-                r.raise_for_status()
-                data = r.json()
-                break
-            except (requests.RequestException, ValueError):
-                continue
-        if data:
-            break
-        time.sleep(2)
+    # Trois segments du trajet (qui se recouvrent d'un point), un par requête
+    bounds = [0, n // 3, 2 * n // 3, n]
+    jobs = []
+    for i in range(3):
+        seg = sampled[max(0, bounds[i] - 1):bounds[i + 1]]
+        if not seg:
+            continue
+        poly = ",".join(f"{lat:.5f},{lon:.5f}" for lat, lon in seg)
+        query = (f'[out:json][timeout:12];nwr["{key}"="{value}"]'
+                 f'(around:{radius},{poly});out center 30;')
+        jobs.append((query, i % len(OVERPASS_SERVERS)))
 
-    if not data:
-        return []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        results = list(ex.map(lambda j: _overpass_query(*j), jobs))
 
     places, seen = [], set()
-    for el in data["elements"]:
-        tags = el.get("tags", {})
-        name = tags.get("name")
-        lat = el.get("lat") or el.get("center", {}).get("lat")
-        lon = el.get("lon") or el.get("center", {}).get("lon")
-        if not (name and lat and lon):
+    for data in results:
+        if not data:
             continue
-        dedup_key = (name, round(lat, 3), round(lon, 3))
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
-        places.append({
-            "name": name, "lat": lat, "lon": lon,
-            "adresse": _osm_address(tags),
-            "horaires": tags.get("opening_hours", ""),
-        })
+        for el in data["elements"]:
+            tags = el.get("tags", {})
+            name = tags.get("name")
+            lat = el.get("lat") or el.get("center", {}).get("lat")
+            lon = el.get("lon") or el.get("center", {}).get("lon")
+            if not (name and lat and lon):
+                continue
+            dedup_key = (name, round(lat, 3), round(lon, 3))
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            places.append({
+                "name": name, "lat": lat, "lon": lon,
+                "adresse": _osm_address(tags),
+                "horaires": tags.get("opening_hours", ""),
+            })
     return places
 
 
+# ---------- Position sur le trajet ----------
 def _profile_route(line):
     """Échantillonne le tracé (~200 points) et calcule la distance cumulée."""
     step = max(1, len(line) // 200)
@@ -165,13 +226,30 @@ def _position_on_route(place, pts, cum):
     return best_d, (cum[best_i] / cum[-1] if cum[-1] else 0.0)
 
 
+# ---------- Recherche d'arrêts ----------
 def find_stops(origin, destination, category, max_results=3):
+    t_all = time.time()
+
+    t0 = time.time()
     a, b = geocode(origin), geocode(destination)
+    _log("géocodage", t0)
     if not a or not b:
         return {"error": "Lieu introuvable"}
-    _, _, line = route([a, b])
 
-    places = places_along(line, category)
+    t0 = time.time()
+    _, _, line = route([a, b])
+    _log("itinéraire", t0)
+
+    cache_key = f"{a[0]:.3f},{a[1]:.3f}|{b[0]:.3f},{b[1]:.3f}|{category}"
+    places = _cache_get(cache_key)
+    if places is not None:
+        _log("lieux (cache)", time.time())
+    else:
+        t0 = time.time()
+        places = places_along(line, category)
+        _log(f"lieux ({len(places)} trouvés)", t0)
+        if places:
+            _cache_set(cache_key, places)
     if not places:
         return {"error": "Service de recherche de lieux indisponible, réessaie dans un instant."}
 
@@ -193,7 +271,9 @@ def find_stops(origin, destination, category, max_results=3):
             p["avancement"] = ""
 
     # Détour de chaque candidat : un seul appel OSRM pour tous
+    t0 = time.time()
     matrix = durations_matrix([a, b] + [(p["lat"], p["lon"]) for p in candidates])
+    _log("calcul des détours", t0)
     base = matrix[0][1]
     if base is None:
         return {"error": "Itinéraire introuvable"}
@@ -217,9 +297,11 @@ def find_stops(origin, destination, category, max_results=3):
 
     # Adresse manquante dans OSM : on la retrouve pour les options finales
     if REVERSE_GEOCODE:
+        t0 = time.time()
         for opt in chosen:
             if not opt["adresse"]:
                 opt["adresse"] = reverse_address(opt["lat"], opt["lon"])
+        _log("adresses manquantes", t0)
 
     for i, opt in enumerate(chosen, start=1):
         opt["numero"] = i
@@ -233,6 +315,7 @@ def find_stops(origin, destination, category, max_results=3):
          "horaires": o["horaires"]}
         for o in chosen
     ]
+    _log("TOTAL find_stops", t_all)
     return {"trajet_direct_min": round(base / 60), "options": public}
 
 
@@ -258,7 +341,5 @@ def select_stop(numero):
 
 
 if __name__ == "__main__":
-    t0 = time.time()
-    print(find_stops("Cergy", "Paris", "fast_food"))
-    print(f"[{time.time() - t0:.1f} s]")
+    print(find_stops("Cergy", "Paris", "restaurant"))
     print(select_stop(1))

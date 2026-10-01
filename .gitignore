@@ -31,9 +31,12 @@ temp/
 # Python cache
 .pytest_cache/
 
+# Application / model cache
+.cache/
+cache/
+
 # Logs
 *.log
 
 # Piper voice models
-voices/*.onnx
 voices/
