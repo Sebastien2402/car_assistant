@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import wave
 
 import numpy as np
 import webrtcvad
@@ -16,11 +17,11 @@ FRAME_MS = 30
 FRAME_BYTES = SR * FRAME_MS // 1000 * 2  # 960 octets (s16le, mono)
 MIC = "RDPSource"
 PIPER_MODEL = "voices/fr_FR-siwis-medium.onnx"
-VOCAB = "Copilote de voiture. Trajet, fast-food, restaurant, station-service, pharmacie, café, Cergy, Paris."
+VOCAB = "Copilote de voiture. Itinéraire, trajet, arrêt, fast-food, restaurant, station-service, pharmacie, café, Cergy, Paris, Vitry-sur-Seine."
 
 print("Chargement de Whisper...")
 _stt = WhisperModel("small", device="cpu", compute_type="int8")
-_vad = webrtcvad.Vad(2)  # 0 = permissif, 3 = très strict
+_vad = webrtcvad.Vad(3)  # 0 = permissif, 3 = très strict
 
 
 def listen(max_wait=12, max_speech=15, end_silence=0.9):
@@ -69,6 +70,31 @@ def listen(max_wait=12, max_speech=15, end_silence=0.9):
     return text
 
 
+# ---------- Synthèse vocale ----------
+try:
+    from piper import PiperVoice
+    _voice = PiperVoice.load(PIPER_MODEL)
+except Exception as e:
+    print(f"[piper python indisponible, repli sur la ligne de commande : {e}]")
+    _voice = None
+
+
+def _synth(text, path):
+    """Synthétise `text` dans le fichier WAV `path`."""
+    if _voice is not None:
+        try:
+            with wave.open(path, "wb") as wf:
+                if hasattr(_voice, "synthesize_wav"):
+                    _voice.synthesize_wav(text, wf)
+                else:
+                    _voice.synthesize(text, wf)
+            return
+        except Exception as e:
+            print(f"[piper python : {e} ; repli sur la ligne de commande]")
+    subprocess.run(["piper", "-m", PIPER_MODEL, "-f", path],
+                   input=text.encode("utf-8"), check=True, capture_output=True)
+
+
 def _clean(text):
     return re.sub(r"[*#`_]", "", text).strip()
 
@@ -87,8 +113,14 @@ class Speaker:
         threading.Thread(target=self._play_worker, daemon=True).start()
 
     def say(self, text):
-        for sentence in _split(text):
-            self._text_q.put(sentence)
+        text = _clean(text)
+        if not text:
+            return
+        if len(text) <= 160:  # réponse courte : un seul bloc, sans pause au milieu
+            self._text_q.put(text)
+        else:
+            for sentence in _split(text):
+                self._text_q.put(sentence)
 
     def wait(self):
         self._text_q.join()
@@ -101,8 +133,7 @@ class Speaker:
             try:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     path = f.name
-                subprocess.run(["piper", "-m", PIPER_MODEL, "-f", path],
-                               input=text.encode("utf-8"), check=True, capture_output=True)
+                _synth(text, path)
                 self._play_q.put(path)
             except Exception as e:
                 print(f"[voix : {e}]")

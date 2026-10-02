@@ -1,10 +1,13 @@
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from math import radians, sin, cos, asin, sqrt
 
 import requests
+
+from poi_local import available as local_db_available, places_local
 
 UA = {"User-Agent": "copilote-vocal-proto/0.1 (projet perso)"}
 OSRM = "https://router.project-osrm.org"
@@ -12,7 +15,6 @@ NOMINATIM = "https://nominatim.openstreetmap.org"
 OVERPASS_SERVERS = [
     "https://overpass-api.de/api/interpreter",
     "https://lz4.overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
 ]
 
 CATEGORIES = {
@@ -34,6 +36,7 @@ CACHE_TTL = 24 * 3600
 STATE = {}  # dernière recherche, pour valider un choix ensuite
 _GEO_CACHE = {}
 _last_nominatim = 0.0
+_nominatim_lock = threading.Lock()
 
 
 def _log(label, t0):
@@ -47,7 +50,7 @@ def _dist_m(a, b):
     return 2 * 6371000 * asin(sqrt(h))
 
 
-# ---------- Cache disque ----------
+# ---------- Cache disque (Overpass) ----------
 def _cache_get(key):
     try:
         with open(CACHE_FILE, encoding="utf-8") as f:
@@ -76,19 +79,38 @@ def _cache_set(key, places):
 
 # ---------- Nominatim ----------
 def _nominatim(path, params):
-    """Appel Nominatim avec respect de la limite d'une requête par seconde."""
+    """Appel Nominatim : une seule requête à la fois, 1 par seconde maximum."""
     global _last_nominatim
-    wait = 1.1 - (time.time() - _last_nominatim)
-    if wait > 0:
-        time.sleep(wait)
-    r = requests.get(f"{NOMINATIM}/{path}", params={**params, "format": "json"},
-                     headers=UA, timeout=15)
-    _last_nominatim = time.time()
-    r.raise_for_status()
-    return r.json()
+    with _nominatim_lock:
+        wait = 1.1 - (time.time() - _last_nominatim)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            r = requests.get(f"{NOMINATIM}/{path}", params={**params, "format": "json"},
+                             headers=UA, timeout=15)
+        finally:
+            _last_nominatim = time.time()
+        r.raise_for_status()
+        return r.json()
+
+
+def _parse_coords(query):
+    """Reconnaît une position « lat,lon » (ex. 48.85660,2.35220)."""
+    parts = query.split(",")
+    if len(parts) == 2:
+        try:
+            lat, lon = float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            return lat, lon
+    return None
 
 
 def geocode(query):
+    coords = _parse_coords(query)
+    if coords:
+        return coords
     key = query.strip().lower()
     if key in _GEO_CACHE:
         return _GEO_CACHE[key]
@@ -134,10 +156,13 @@ def durations_matrix(points):
     return r.json()["durations"]
 
 
-# ---------- Overpass ----------
+# ---------- Overpass (secours) ----------
 def _osm_address(tags):
-    street = " ".join(filter(None, [tags.get("addr:housenumber"), tags.get("addr:street")]))
-    return ", ".join(filter(None, [street, tags.get("addr:city", "")]))
+    street = tags.get("addr:street")
+    if not street:
+        return ""  # un numéro seul n'est pas une adresse exploitable
+    num = tags.get("addr:housenumber", "")
+    return ", ".join(filter(None, [f"{num} {street}".strip(), tags.get("addr:city", "")]))
 
 
 def _overpass_query(query, first_server):
@@ -155,11 +180,13 @@ def _overpass_query(query, first_server):
             _log(f"overpass {host} ok", t0)
             return data
         except (requests.RequestException, ValueError) as e:
-            _log(f"overpass {host} échec ({type(e).__name__})", t0)
+            code = getattr(getattr(e, "response", None), "status_code", "")
+            _log(f"overpass {host} échec ({type(e).__name__} {code})", t0)
     return None
 
 
 def places_along(line, category, radius=1500, n_points=12):
+    """Retourne (lieux, complet). complet = False si une des requêtes a échoué."""
     key, value = CATEGORIES[category]
     sampled = line[::max(1, len(line) // n_points)]
     n = len(sampled)
@@ -197,9 +224,10 @@ def places_along(line, category, radius=1500, n_points=12):
             places.append({
                 "name": name, "lat": lat, "lon": lon,
                 "adresse": _osm_address(tags),
+                "addr_ok": bool(tags.get("addr:street") and tags.get("addr:city")),
                 "horaires": tags.get("opening_hours", ""),
             })
-    return places
+    return places, all(r is not None for r in results)
 
 
 # ---------- Position sur le trajet ----------
@@ -227,7 +255,9 @@ def _position_on_route(place, pts, cum):
 
 
 # ---------- Recherche d'arrêts ----------
-def find_stops(origin, destination, category, max_results=3):
+def find_stops(origin, destination, category, max_results=3, name_like=None):
+    """category : une des catégories (ou None si on cherche une enseigne précise).
+    name_like : morceau de nom d'enseigne, ex. « mcdonald »."""
     t_all = time.time()
 
     t0 = time.time()
@@ -240,22 +270,41 @@ def find_stops(origin, destination, category, max_results=3):
     _, _, line = route([a, b])
     _log("itinéraire", t0)
 
-    cache_key = f"{a[0]:.3f},{a[1]:.3f}|{b[0]:.3f},{b[1]:.3f}|{category}"
-    places = _cache_get(cache_key)
-    if places is not None:
-        _log("lieux (cache)", time.time())
-    else:
+    # 1) Base locale (rapide). 2) Overpass en secours si la base est absente ou vide.
+    places = None
+    local_used = local_db_available()
+    if local_used:
         t0 = time.time()
-        places = places_along(line, category)
-        _log(f"lieux ({len(places)} trouvés)", t0)
-        if places:
-            _cache_set(cache_key, places)
+        places = places_local(line, category, name_like=name_like)
+        _log(f"lieux base locale ({len(places)} trouvés)", t0)
+
+    if not places and not (local_used and name_like):
+        if category not in CATEGORIES:
+            return {"error": "Type de lieu manquant", "code": "category"}
+        cache_key = f"{a[0]:.3f},{a[1]:.3f}|{b[0]:.3f},{b[1]:.3f}|{category}"
+        places = _cache_get(cache_key)
+        if places is not None:
+            _log("lieux (cache)", time.time())
+        else:
+            t0 = time.time()
+            places, complete = places_along(line, category)
+            _log(f"lieux Overpass ({len(places)} trouvés)", t0)
+            if places and complete:
+                _cache_set(cache_key, places)
+
+    if name_like and places:
+        nl = name_like.lower()
+        places = [p for p in places if nl in p["name"].lower()]
     if not places:
+        if name_like:
+            return {"error": "Aucun lieu correspondant", "code": "none"}
         return {"error": "Service de recherche de lieux indisponible, réessaie dans un instant."}
 
+    t0 = time.time()
     pts, cum = _profile_route(line)
     for p in places:
         p["dist_trace"], p["frac"] = _position_on_route(p, pts, cum)
+    _log("position sur le trajet", t0)
 
     # Candidats : les plus proches du tracé dans chaque tranche du trajet
     candidates = []
@@ -280,7 +329,7 @@ def find_stops(origin, destination, category, max_results=3):
     for i, p in enumerate(candidates, start=2):
         to_p, from_p = matrix[0][i], matrix[i][1]
         p["detour_min"] = (None if to_p is None or from_p is None
-                           else round((to_p + from_p - base) / 60, 1))
+                           else round(max(0.0, to_p + from_p - base) / 60, 1))
     candidates = [p for p in candidates if p["detour_min"] is not None]
     if not candidates:
         return {"error": "Aucun arrêt accessible trouvé"}
@@ -295,13 +344,13 @@ def find_stops(origin, destination, category, max_results=3):
     chosen += rest[:max(0, max_results - len(chosen))]
     chosen = sorted(chosen[:max_results], key=lambda p: p["frac"])  # dans l'ordre du trajet
 
-    # Adresse manquante dans OSM : on la retrouve pour les options finales
+    # Adresse absente ou incomplète dans OSM : on la retrouve pour les options finales
     if REVERSE_GEOCODE:
         t0 = time.time()
         for opt in chosen:
-            if not opt["adresse"]:
-                opt["adresse"] = reverse_address(opt["lat"], opt["lon"])
-        _log("adresses manquantes", t0)
+            if not opt.get("addr_ok"):
+                opt["adresse"] = reverse_address(opt["lat"], opt["lon"]) or opt["adresse"]
+        _log("adresses", t0)
 
     for i, opt in enumerate(chosen, start=1):
         opt["numero"] = i
@@ -319,6 +368,7 @@ def find_stops(origin, destination, category, max_results=3):
     return {"trajet_direct_min": round(base / 60), "options": public}
 
 
+# ---------- Liens et carte ----------
 def build_links(origin, stop, destination):
     o = f"{origin[0]},{origin[1]}"
     s = f"{stop[0]},{stop[1]}"
@@ -329,6 +379,31 @@ def build_links(origin, stop, destination):
     }
 
 
+def _simplify(line, max_points=500):
+    """Allège un tracé pour l'envoyer à la carte du téléphone."""
+    step = max(1, len(line) // max_points)
+    pts = line[::step]
+    if pts[-1] != line[-1]:
+        pts.append(line[-1])
+    return [[round(lat, 5), round(lon, 5)] for lat, lon in pts]
+
+
+def build_map(points):
+    """points : liste de (nom, rôle, (lat, lon)) dans l'ordre du trajet.
+    Rôles : start, stop, end. Retourne les données de la carte (ou None)."""
+    try:
+        dur, dist, line = route([p[2] for p in points])
+    except Exception as e:
+        print(f"[carte : {e}]")
+        return None
+    return {
+        "points": [{"name": n, "role": r, "lat": c[0], "lon": c[1]} for n, r, c in points],
+        "line": _simplify(line),
+        "duration_min": round(dur / 60),
+        "distance_km": round(dist / 1000, 1),
+    }
+
+
 def select_stop(numero):
     options = STATE.get("options")
     if not options:
@@ -336,8 +411,28 @@ def select_stop(numero):
     if not 1 <= numero <= len(options):
         return {"error": f"Choisis un numéro entre 1 et {len(options)}."}
     opt = options[numero - 1]
-    links = build_links(STATE["origin"], (opt["lat"], opt["lon"]), STATE["destination"])
+    stop = (opt["lat"], opt["lon"])
+    links = build_links(STATE["origin"], stop, STATE["destination"])
+    links["map"] = build_map([
+        ("Départ", "start", STATE["origin"]),
+        (opt["name"], "stop", stop),
+        ("Arrivée", "end", STATE["destination"]),
+    ])
     return {"arret": opt["name"], "adresse": opt["adresse"], "links": links}
+
+
+def trip_links(origin, destination):
+    """Liens d'itinéraire direct (sans arrêt) et données de la carte."""
+    a, b = geocode(origin), geocode(destination)
+    if not a or not b:
+        return {"error": "Je n'ai pas trouvé ce trajet."}
+    o, d = f"{a[0]},{a[1]}", f"{b[0]},{b[1]}"
+    links = {
+        "google_maps": f"https://www.google.com/maps/dir/?api=1&origin={o}&destination={d}&travelmode=driving",
+        "apple_plans": f"https://maps.apple.com/?saddr={o}&daddr={d}&dirflg=d",
+    }
+    links["map"] = build_map([(origin, "start", a), (destination, "end", b)])
+    return {"links": links}
 
 
 if __name__ == "__main__":

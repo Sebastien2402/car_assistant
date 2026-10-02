@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>Copilote</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #0b0f14; color: #e8eef5; display: flex; align-items: center; justify-content: center;
+         font: 17px/1.4 -apple-system, system-ui, sans-serif; padding: 24px; }
+  form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+  h1 { margin: 0; font-size: 26px; }
+  p { margin: 0; color: #8a97a8; }
+  input[type=password], input[type=text] { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #2a3544;
+         background: #141b24; color: #e8eef5; font-size: 18px; text-align: center; }
+  button { padding: 14px; border-radius: 12px; border: none; background: #3b82f6; color: #fff;
+           font-size: 18px; font-weight: 600; }
+  button:disabled { opacity: .6; }
+  label { color: #8a97a8; font-size: 14px; }
+  #msg { min-height: 1.4em; color: #ef4444; font-size: 15px; }
+</style>
+</head>
+<body>
+<form id="f">
+  <h1>Copilote</h1>
+  <p>Entre le code d'accès pour continuer.</p>
+  <input id="code" type="password" name="password" placeholder="Code d'accès" autocomplete="current-password"
+         autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
+  <label><input type="checkbox" id="show"> Afficher le code</label>
+  <button id="btn" type="submit">Entrer</button>
+  <div id="msg"></div>
+</form>
+<script>
+  const input = document.getElementById("code"), btn = document.getElementById("btn"), msg = document.getElementById("msg");
+  document.getElementById("show").addEventListener("change", (e) => { input.type = e.target.checked ? "text" : "password"; });
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!input.value.trim()) return;
+    btn.disabled = true; msg.textContent = "";
+    try {
+      const fd = new FormData();
+      fd.append("code", input.value);
+      const res = await fetch("/api/login", { method: "POST", body: fd, credentials: "same-origin" });
+      if (res.ok) { location.replace("/"); return; }
+      msg.textContent = res.status === 429 ? "Trop d'essais. Réessaie dans quelques minutes." : "Code incorrect.";
+    } catch (err) {
+      msg.textContent = "Erreur de connexion.";
+    }
+    btn.disabled = false;
+  });
+</script>
+</body>
+</html>
