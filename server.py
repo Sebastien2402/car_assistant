@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 import historique
+from tools import build_map
 
 # Le code d'accès est vérifié en premier, avant de charger les modèles
 TOKEN = os.environ.get("COPILOTE_TOKEN", "").strip()
@@ -225,3 +226,20 @@ def get_history():
 def clear_history():
     historique.clear()
     return {"ok": True}
+
+
+@app.post("/api/reroute", dependencies=[Depends(check)])
+async def reroute(lat: float = Form(...), lon: float = Form(...),
+                  dest_lat: float = Form(...), dest_lon: float = Form(...),
+                  dest_name: Optional[str] = Form(None),
+                  stop_lat: Optional[float] = Form(None), stop_lon: Optional[float] = Form(None),
+                  stop_name: Optional[str] = Form(None)):
+    """Recalcule l'itinéraire depuis la position actuelle (hors itinéraire)."""
+    pts = [("Ma position", "start", (lat, lon))]
+    if stop_lat is not None and stop_lon is not None:
+        pts.append((stop_name or "Arrêt", "stop", (stop_lat, stop_lon)))
+    pts.append((dest_name or "Arrivée", "end", (dest_lat, dest_lon)))
+    m = await asyncio.get_running_loop().run_in_executor(None, build_map, pts)
+    if not m:
+        raise HTTPException(status_code=502, detail="Calcul impossible")
+    return {"map": m}

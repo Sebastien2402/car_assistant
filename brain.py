@@ -5,6 +5,7 @@ import time
 import ollama
 
 import historique
+from lieux import corrige_lieu
 from tools import CATEGORIES, STATE, find_stops, geocode, select_stop, trip_links
 
 MODEL = "qwen2.5:3b"
@@ -298,15 +299,17 @@ class Brain:
         if not trip["origin_gps"]:
             checks.insert(0, ("origin", "fix_origin"))
         for cle, pend in checks:
-            nom = trip[cle]
+            nom = corrige_lieu(trip[cle]) or trip[cle]   # Choisie -> Choisy
+            trip[cle] = nom
             try:
                 trouve = geocode(nom)
             except Exception:
                 trouve = True  # service indisponible : on ne bloque pas
             if not trouve:
+                print(f"[géocodage : introuvable {nom!r}]")
                 trip[cle] = ""
                 etat["pending"] = pend
-                return f"Je ne trouve pas {nom}. Tu peux répéter ce lieu ?"
+                return f"Je ne trouve pas {nom}. Redis-moi juste ce lieu, ou une ville proche."
 
         try:  # aperçu du trajet sur la carte, dès l'annonce
             res = self._direct_links()
@@ -331,6 +334,7 @@ class Brain:
         self._links = {"titre": f"De {self._origin_label()} à {trip['destination']}",
                        **res["links"]}
         historique.add(trip["destination"], self._origin_label())
+        self._links["final"] = True
         STATE.clear()
         return "Ton itinéraire est prêt. Bonne route !"
 
@@ -340,6 +344,7 @@ class Brain:
             return res["error"]
         self._links = {"titre": f"Via {res['arret']} ({res['adresse']})", **res["links"]}
         historique.add(self.trip["destination"], self._origin_label(), res["arret"])
+        self._links["final"] = True
         STATE.clear()
         return f"C'est noté, on passe par {res['arret']}. Ton itinéraire est prêt."
 
@@ -384,18 +389,23 @@ class Brain:
             return self._rejouer_dernier()
 
         # 0b) On attendait un nom de lieu (celui qu'on n'a pas trouvé) : réponse courte = ce lieu
-        if (pending in ("fix_origin", "fix_destination") and len(words) <= 4
-                and not re.search(r"\b(je|j'|veux|vais|aller|non)\b", t)):
-            if pending == "fix_origin" and FROM_HERE.search(t):
-                trip["origin"], trip["origin_gps"] = "", True
-            else:
-                lieu = re.sub(r"^(?:de|d'|du|des|à|au|aux|vers|pour|depuis|en)\s*", "",
-                              heard.strip(" .!?"), flags=re.I)
-                if pending == "fix_origin":
-                    trip["origin"], trip["origin_gps"] = lieu, False
+        if pending in ("fix_origin", "fix_destination"):
+            # « Je voulais dire, Villejuif » -> Villejuif
+            court = re.sub(
+                r"^\W*(?:(?:je voulais dire|je veux dire|je disais|en fait|plutôt|plutot|c'est|euh|ah|oui)\b[\s,:]*)+",
+                "", heard.strip(), flags=re.I).strip(" .!?")
+            if (court and len(court.split()) <= 5
+                    and not re.search(r"\b(je|j'|veux|vais|aller|non)\b", court, re.I)):
+                if pending == "fix_origin" and FROM_HERE.search(t):
+                    trip["origin"], trip["origin_gps"] = "", True
                 else:
-                    trip["destination"] = lieu
-            return self._annoncer_trajet()
+                    lieu = re.sub(r"^(?:de|d'|du|des|à|au|aux|vers|pour|depuis|en)\s*", "",
+                                  court, flags=re.I)
+                    if pending == "fix_origin":
+                        trip["origin"], trip["origin_gps"] = lieu, False
+                    else:
+                        trip["destination"] = lieu
+                return self._annoncer_trajet()
 
         # 1) Réponses courtes à la question qu'on vient de poser
         if pending:
@@ -436,6 +446,7 @@ class Brain:
 
         # 4) Sinon, le modèle analyse la phrase
         out = comprendre(heard)
+        print(f"[modèle : {out}]")
         action = out.get("action", "autre")
 
         # Demande d'arrêt courte que le modèle n'a pas reconnue (par exemple : Un restaurant.)

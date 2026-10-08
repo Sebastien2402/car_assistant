@@ -12,6 +12,7 @@ from poi_local import available as local_db_available, places_local
 UA = {"User-Agent": "copilote-vocal-proto/0.1 (projet perso)"}
 OSRM = "https://router.project-osrm.org"
 NOMINATIM = "https://nominatim.openstreetmap.org"
+IDF_VIEWBOX = "1.446,49.241,3.559,48.120"   # Île-de-France : gauche, haut, droite, bas
 OVERPASS_SERVERS = [
     "https://overpass-api.de/api/interpreter",
     "https://lz4.overpass-api.de/api/interpreter",
@@ -114,12 +115,14 @@ def geocode(query):
     key = query.strip().lower()
     if key in _GEO_CACHE:
         return _GEO_CACHE[key]
-    data = _nominatim("search", {"q": query, "limit": 1})
-    if not data:
-        return None
-    result = (float(data[0]["lat"]), float(data[0]["lon"]))
-    _GEO_CACHE[key] = result
-    return result
+    # 1) recherche normale ; 2) si rien, on cherche uniquement en Île-de-France (utile pour les noms de lieux)
+    for extra in ({}, {"viewbox": IDF_VIEWBOX, "bounded": 1}):
+        data = _nominatim("search", {"q": query, "limit": 1, **extra})
+        if data:
+            result = (float(data[0]["lat"]), float(data[0]["lon"]))
+            _GEO_CACHE[key] = result
+            return result
+    return None
 
 
 def reverse_address(lat, lon):
@@ -379,28 +382,174 @@ def build_links(origin, stop, destination):
     }
 
 
-def _simplify(line, max_points=500):
-    """Allège un tracé pour l'envoyer à la carte du téléphone."""
-    step = max(1, len(line) // max_points)
-    pts = line[::step]
-    if pts[-1] != line[-1]:
-        pts.append(line[-1])
-    return [[round(lat, 5), round(lon, 5)] for lat, lon in pts]
+def _dp_simplify(line, tol_m=6.0):
+    """Allège un tracé en gardant sa forme (Douglas-Peucker), pour l'envoyer au téléphone."""
+    n = len(line)
+    if n <= 2:
+        return [[round(lat, 5), round(lon, 5)] for lat, lon in line]
+    ky = 110540.0
+    kx = 111320.0 * cos(radians(line[0][0]))
+    pts = [(lon * kx, lat * ky) for lat, lon in line]
+    keep = [False] * n
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        ax, ay = pts[a]
+        dx, dy = pts[b][0] - ax, pts[b][1] - ay
+        l2 = dx * dx + dy * dy
+        best, bi = 0.0, -1
+        for i in range(a + 1, b):
+            px, py = pts[i][0] - ax, pts[i][1] - ay
+            if l2 == 0:
+                d = sqrt(px * px + py * py)
+            else:
+                t = max(0.0, min(1.0, (px * dx + py * dy) / l2))
+                ex, ey = px - t * dx, py - t * dy
+                d = sqrt(ex * ex + ey * ey)
+            if d > best:
+                best, bi = d, i
+        if best > tol_m and bi != -1:
+            keep[bi] = True
+            stack.append((a, bi))
+            stack.append((bi, b))
+    return [[round(line[i][0], 5), round(line[i][1], 5)] for i in range(n) if keep[i]]
+
+
+# ---------- Instructions de guidage en français ----------
+_ORD_FR = {1: "première", 2: "deuxième", 3: "troisième", 4: "quatrième", 5: "cinquième",
+           6: "sixième", 7: "septième", 8: "huitième", 9: "neuvième", 10: "dixième"}
+_MOD_FR = {
+    "left": ("à gauche", "left"),
+    "right": ("à droite", "right"),
+    "slight left": ("légèrement à gauche", "slight_left"),
+    "slight right": ("légèrement à droite", "slight_right"),
+    "sharp left": ("franchement à gauche", "sharp_left"),
+    "sharp right": ("franchement à droite", "sharp_right"),
+    "straight": ("tout droit", "straight"),
+    "uturn": ("demi-tour", "uturn"),
+}
+
+
+def _step_fr(step, leg_index, n_legs):
+    """Convertit une étape OSRM en instruction française (ou None si elle est inutile à dire)."""
+    m = step.get("maneuver", {})
+    typ, mod = m.get("type", ""), m.get("modifier", "")
+    loc = m.get("location") or [0, 0]
+    road = (step.get("name") or "").strip() or (step.get("ref") or "").strip()
+    sur = f" sur {road}" if road else ""
+    where, icon = _MOD_FR.get(mod, ("", "straight"))
+    kind = "turn"
+
+    if typ == "depart":
+        if leg_index > 0:
+            return None  # le départ de la deuxième partie (après l'arrêt) ne s'annonce pas
+        text, icon, kind = f"Démarrez{sur}", "depart", "depart"
+    elif typ == "arrive":
+        if leg_index < n_legs - 1:
+            text, icon, kind = "Vous êtes arrivé à votre arrêt", "stop", "stop"
+        else:
+            text, icon, kind = "Vous êtes arrivé à destination", "arrive", "arrive"
+    elif typ == "turn":
+        if mod == "straight":
+            text = f"Continuez tout droit{sur}"
+        elif mod == "uturn":
+            text = f"Faites demi-tour{sur}"
+        else:
+            text = f"Tournez {where}{sur}"
+    elif typ == "end of road":
+        text = f"Au bout de la route, tournez {where}{sur}" if where else f"Au bout de la route, continuez{sur}"
+    elif typ == "fork":
+        if mod in ("left", "right", "slight left", "slight right"):
+            side = "à gauche" if "left" in mod else "à droite"
+            text = f"Restez {side} à la bifurcation{sur}"
+            icon = "fork_left" if "left" in mod else "fork_right"
+        else:
+            text = f"Continuez à la bifurcation{sur}"
+    elif typ == "merge":
+        text = f"Insérez-vous{sur}"
+    elif typ == "on ramp":
+        text = f"Prenez la bretelle {where}{sur}" if where else f"Prenez la bretelle{sur}"
+    elif typ == "off ramp":
+        first = (step.get("destinations") or "").split(",")[0]
+        dest = first.split(":")[-1].strip()
+        text = f"Prenez la sortie {where}" if where else "Prenez la sortie"
+        text += f" en direction de {dest}" if dest else sur
+    elif typ in ("roundabout", "rotary"):
+        ex = m.get("exit")
+        if ex:
+            text = f"Au rond-point, prenez la {_ORD_FR.get(ex, str(ex) + 'e')} sortie{sur}"
+        else:
+            text = f"Prenez le rond-point{sur}"
+        icon, kind = "roundabout", "roundabout"
+    elif typ in ("roundabout turn", "rotary turn"):
+        text = f"Au rond-point, tournez {where}{sur}" if where else f"Au rond-point, continuez{sur}"
+        icon, kind = "roundabout", "roundabout"
+    elif typ == "continue" and mod not in ("", "straight"):
+        text = f"Continuez {where}{sur}"
+    else:
+        return None  # changement de nom de rue, sortie de rond-point... : inutile à annoncer
+
+    return {"text": text, "icon": icon, "kind": kind, "name": road,
+            "lat": round(loc[1], 5), "lon": round(loc[0], 5)}
+
+
+def _speed_profile(legs):
+    """Vitesse (km/h) le long du trajet, d'après les vitesses de la route renvoyées par OSRM.
+    Retourne {"total": mètres, "runs": [[départ_m, km/h], ...]} ou None. Jamais au-dessus de 130 km/h."""
+    runs, d = [], 0.0
+    for leg in legs:
+        ann = leg.get("annotation") or {}
+        for v, dd in zip(ann.get("speed") or [], ann.get("distance") or []):
+            kmh = 5 * round(min(130.0, max(5.0, v * 3.6)) / 5)   # arrondi à 5 km/h
+            if not runs or runs[-1][1] != kmh:
+                runs.append([round(d), kmh])
+            d += dd
+    return {"total": round(d), "runs": runs} if runs else None
+
+
+def route_full(points):
+    """Comme route(), avec les instructions détaillées et les vitesses de la route.
+    Retourne (durée_s, distance_m, tracé, étapes, vitesses)."""
+    coords = ";".join(f"{lon},{lat}" for lat, lon in points)
+    r = requests.get(
+        f"{OSRM}/route/v1/driving/{coords}",
+        params={"overview": "full", "geometries": "geojson", "steps": "true",
+                "annotations": "speed,distance"},
+        timeout=25,
+    )
+    r.raise_for_status()
+    rt = r.json()["routes"][0]
+    line = [(lat, lon) for lon, lat in rt["geometry"]["coordinates"]]
+    steps = []
+    legs = rt.get("legs", [])
+    for li, leg in enumerate(legs):
+        for st in leg.get("steps", []):
+            item = _step_fr(st, li, len(legs))
+            if item:
+                steps.append(item)
+    return rt["duration"], rt["distance"], line, steps, _speed_profile(legs)
 
 
 def build_map(points):
     """points : liste de (nom, rôle, (lat, lon)) dans l'ordre du trajet.
-    Rôles : start, stop, end. Retourne les données de la carte (ou None)."""
+    Rôles : start, stop, end. Retourne les données de la carte et du guidage (ou None)."""
     try:
-        dur, dist, line = route([p[2] for p in points])
+        dur, dist, line, steps, speeds = route_full([p[2] for p in points])
     except Exception as e:
         print(f"[carte : {e}]")
         return None
     return {
         "points": [{"name": n, "role": r, "lat": c[0], "lon": c[1]} for n, r, c in points],
-        "line": _simplify(line),
+        "line": _dp_simplify(line),
+        "steps": steps,
+        "speeds": speeds,
         "duration_min": round(dur / 60),
+        "duration_s": round(dur),
         "distance_km": round(dist / 1000, 1),
+        "distance_m": round(dist),
     }
 
 

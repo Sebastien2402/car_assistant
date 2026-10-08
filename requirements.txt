@@ -1,10 +1,6 @@
-fastapi==0.142.2
-faster-whisper==1.2.1
-numpy==2.2.6
+faster_whisper==1.2.1
+numpy==2.5.3
 ollama==0.6.3
-piper-tts==1.8.0
-python-multipart==0.0.32
-requests==2.34.2
+Requests==2.34.2
 soundfile==0.14.0
-uvicorn==0.54.0
-webrtcvad-wheels==2.0.14
+webrtcvad_wheels==2.0.14
