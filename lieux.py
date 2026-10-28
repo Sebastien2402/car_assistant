@@ -30,7 +30,7 @@ COMMUNES = [
 REPERES = [
     "Place de la Concorde", "Gare du Nord", "Gare de Lyon", "Gare de l'Est", "Gare Montparnasse",
     "Gare Saint-Lazare", "Gare d'Austerlitz", "Aéroport Charles de Gaulle", "Aéroport d'Orly",
-    "Tour Eiffel", "Arc de Triomphe",
+    "Tour Eiffel", "Arc de Triomphe", "Stade Charléty", "Stade de France", "Parc des Princes",
 ]
 
 LIEUX_PERSO = []   # ajoute ici tes lieux habituels, ex. "Rue de Rivoli"
@@ -42,15 +42,20 @@ ALIAS = {
     "Très-Melin-Bissettre": "Le Kremlin-Bicêtre",
     "Kremlin Bissêtre": "Le Kremlin-Bicêtre",
     "Ville Juif": "Villejuif",
+    "Stade Charléty": "Stade Charléty, Paris",
+    "Stade Charlotte": "Stade Charléty, Paris",
+    "Stade Charly": "Stade Charléty, Paris",
+    "Stade Charlety": "Stade Charléty, Paris",
 }
 
 LIEUX = PORTES + COMMUNES + REPERES + LIEUX_PERSO
 
 # Courte liste donnée à Whisper pour qu'il privilégie ces orthographes (limite : ~200 mots)
 PROMPT_WHISPER = ("Trajet en voiture en Île-de-France : Porte de Choisy, Porte d'Italie, Porte d'Orléans, "
-                  "Porte de Bagnolet, Porte Maillot, Porte de la Chapelle, Vitry-sur-Seine, "
+                  "Porte d'Ivry, Porte de Bagnolet, Porte Maillot, Porte de la Chapelle, Vitry-sur-Seine, "
                   "Ivry-sur-Seine, Cergy-Pontoise, La Défense, Boulogne-Billancourt, Issy-les-Moulineaux, "
-                  "Beethoven Concorde à Vitry-sur-Seine, Le Kremlin-Bicêtre, Villejuif.")
+                  "Beethoven Concorde à Vitry-sur-Seine, Le Kremlin-Bicêtre, Villejuif, Stade Charléty. "
+                  "Emmène-moi à...")
 
 
 def _norm(s):
@@ -68,8 +73,10 @@ def _cherche(n, seuil):
         return _ALIAS[n]
     if n in _INDEX:
         return _INDEX[n]
-    proche = get_close_matches(n, list(_INDEX), n=1, cutoff=seuil)
-    return _INDEX[proche[0]] if proche else None
+    proche = get_close_matches(n, list(_ALIAS) + list(_INDEX), n=1, cutoff=seuil)
+    if not proche:
+        return None
+    return _ALIAS.get(proche[0]) or _INDEX[proche[0]]
 
 
 def corrige_lieu(texte, seuil=0.85):

@@ -13,8 +13,6 @@ import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-import historique
-from tools import build_map
 
 # Le code d'accès est vérifié en premier, avant de charger les modèles
 TOKEN = os.environ.get("COPILOTE_TOKEN", "").strip()
@@ -26,10 +24,14 @@ if not TOKEN:
 
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (FileResponse, JSONResponse, RedirectResponse, Response,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
+import historique
 from brain import Brain, warm_up
+from lieux import PROMPT_WHISPER
+from tools import STATE, build_map
 from voice import VOCAB, _clean, _stt, _synth
 
 BASE = Path(__file__).parent
@@ -38,6 +40,9 @@ LOGIN_PAGE = BASE / "static" / "login.html"
 if not APP_PAGE.exists() or not LOGIN_PAGE.exists():
     raise SystemExit("Fichiers manquants : private/index.html et static/login.html "
                      "(déplace static/index.html dans le dossier private).")
+
+# Vocabulaire donné à Whisper : mots du copilote + lieux habituels (orthographes à privilégier)
+WHISPER_PROMPT = VOCAB + " " + PROMPT_WHISPER
 
 # ---------- Accès par code ----------
 COOKIE = "copilote_auth"
@@ -81,6 +86,12 @@ brain = Brain()
 turn_lock = threading.Lock()  # un seul tour de dialogue à la fois (un seul utilisateur)
 
 
+def new_brain():
+    """Nouvelle conversation : on oublie aussi les options d'arrêt de la recherche précédente."""
+    STATE.clear()
+    return Brain()
+
+
 # ---------- Audio ----------
 def decode_audio(data: bytes, content_type: str):
     """Convertit l'audio de l'iPhone (mp4/aac ou webm) en 16 kHz mono float32."""
@@ -101,7 +112,7 @@ def transcribe(audio):
     if len(audio) < 16000 * 0.4:  # moins de 0,4 s : rien à transcrire
         return ""
     segments, _ = _stt.transcribe(audio, language="fr", beam_size=1,
-                                  vad_filter=True, initial_prompt=VOCAB)
+                                  vad_filter=True, initial_prompt=WHISPER_PROMPT)
     return " ".join(s.text.strip() for s in segments).strip()
 
 
@@ -141,7 +152,7 @@ def run_turn(get_text, lat, lon):
                 out = brain.handle(text)
                 print(f"Copilote : {out['reply']}")
                 if out["end"]:
-                    brain = Brain()  # prochaine conversation : on repart de zéro
+                    brain = new_brain()  # prochaine conversation : on repart de zéro
                 q.put({"type": "reply", "text": out["reply"], "audio": synth_b64(out["reply"]),
                        "links": out["links"], "end": out["end"]})
             except Exception as e:
@@ -170,6 +181,11 @@ def index(request: Request):
     """L'appli seulement avec le bon cookie, sinon l'écran du code."""
     page = APP_PAGE if is_authed(request) else LOGIN_PAGE
     return FileResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return Response(status_code=204)  # pas d'icône : évite les 404 dans les logs
 
 
 @app.post("/api/login")
@@ -213,7 +229,7 @@ async def text_turn(text: str = Form(...),
 def reset():
     global brain
     with turn_lock:
-        brain = Brain()
+        brain = new_brain()
     return {"ok": True}
 
 

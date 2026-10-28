@@ -5,31 +5,31 @@ import time
 import ollama
 
 import historique
-from lieux import corrige_lieu
+from lieux import _norm, corrige_lieu
 from tools import CATEGORIES, STATE, find_stops, geocode, select_stop, trip_links
 
 MODEL = "qwen2.5:3b"
 GREETING = "Salut ! Où est-ce qu'on va ?"
 EXIT_WORDS = ("au revoir", "quitter", "on arrête")
 
+# Pas de nom d'enseigne en exemple : le petit modèle a tendance à les recopier
 ROUTER = (
     "Tu analyses la phrase d'un conducteur et tu réponds en JSON. "
     "Renseigne origin et destination uniquement si le conducteur les cite, "
     "sinon laisse-les vides. Recopie les noms de lieux exactement comme "
     "prononcés, avec le numéro d'arrondissement s'il y en a un (Paris 13e). "
     "S'il part de sa position (« d'ici », « de ma position »), laisse origin vide.\n"
-    "- action = trajet : il cite un départ et/ou une arrivée (ville ou adresse) "
-    "sans demander d'arrêt. Exemples : « je vais de Paris à Lyon » (origin = Paris, "
-    "destination = Lyon) ; « emmène-moi à Lyon » (destination = Lyon, origin vide). "
-    "S'il ne cite aucun lieu, ce n'est PAS un trajet.\n"
+    "- action = trajet : il cite un départ et/ou une arrivée (ville, adresse, "
+    "stade, gare, monument...) sans demander d'arrêt. Exemples : « je vais de Paris "
+    "à Lyon » (origin = Paris, destination = Lyon) ; « emmène-moi à Lyon » "
+    "(destination = Lyon, origin vide). S'il ne cite aucun lieu, ce n'est PAS un trajet.\n"
     "- action = chercher : il veut s'arrêter ou trouver un lieu sur la route, "
-    "ou il change d'avis sur le lieu voulu (« finalement plutôt un Pizza Hut »). "
-    "category = fast_food (fast-food, burger, McDo, sandwich, kebab), restaurant "
+    "ou il change d'avis sur le lieu voulu (« finalement plutôt un autre endroit »). "
+    "category = fast_food (fast-food, burger, sandwich, kebab), restaurant "
     "(restaurant, manger, repas, j'ai faim), cafe (café, pause), fuel (essence, "
     "carburant, plein), pharmacy (pharmacie). Si le type de lieu n'est pas clair, "
-    "category = aucune. nom = le nom de l'enseigne UNIQUEMENT s'il demande une "
-    "enseigne précise (McDonald's, Burger King, Pizza Hut, Quick, Total...), "
-    "jamais pour un type de plat ou de lieu ; sinon laisse nom vide.\n"
+    "category = aucune. nom = le nom de l'enseigne UNIQUEMENT si le conducteur le "
+    "prononce, jamais pour un type de plat ou de lieu ; sinon laisse nom vide.\n"
     "- action = autre : tout le reste. reponse = une réponse courte en français "
     "(deux phrases maximum, sans symboles). Si la phrase est incompréhensible, "
     "reponse = « Je n'ai pas bien compris, tu peux répéter ? »."
@@ -71,6 +71,16 @@ GENERIC = {"burger", "burgers", "pizza", "pizzas", "kebab", "sushi", "sushis", "
            "cafe", "restaurant", "fast-food", "fast food", "fastfood", "essence",
            "pharmacie", "sandwich", "tacos", "frites", "poulet", "station", "manger"}
 
+# Enseignes reconnues à l'oral (forme normalisée, sans accents -> nom cherché dans la base)
+BRANDS = {
+    "mcdonald": "McDonald", "mcdo": "McDonald", "macdo": "McDonald", "mc do": "McDonald",
+    "burger king": "Burger King", "kfc": "KFC", "quick": "Quick", "pizza hut": "Pizza Hut",
+    "domino": "Domino", "subway": "Subway", "starbucks": "Starbucks", "columbus": "Columbus",
+    "total": "Total", "shell": "Shell", "esso": "Esso", "bp": "BP", "avia": "Avia",
+    "leclerc": "Leclerc", "carrefour": "Carrefour", "auchan": "Auchan",
+    "intermarche": "Intermarché",
+}
+
 # Catégorie déduite par mots-clés quand le modèle ne la trouve pas (le premier qui correspond gagne)
 CATEGORY_KEYWORDS = [
     ("pharmacy", r"pharmacie|m[ée]dicament"),
@@ -95,6 +105,9 @@ PLACE = re.compile(
 # Tolère les erreurs de transcription (itinéraire entendu tineret)
 ITINERAIRE = re.compile(r"itin\w*|tin[eé]r\w*|navigation|\bgps\b|\blien\b", re.I)
 LIEUX_MOTS = re.compile(r"\b(de|à|vers|pour)\b", re.I)
+# Verbes de déplacement : la phrase demande d'aller quelque part
+TRAJET = re.compile(
+    r"\b(emm[eè]ne|am[eè]ne|conduis|guide[- ]moi|direction|je vais|on va|aller|rendre|rentrer)\b", re.I)
 # d'ici, de ma position : le départ est la position GPS
 FROM_HERE = re.compile(
     r"\b(d'ici|depuis ici|à partir d'ici|de ma position|depuis ma position|"
@@ -171,6 +184,19 @@ def clean_nom(nom):
     return nom
 
 
+def enseigne(text, nom_modele):
+    """Enseigne réellement prononcée dans `text`, sinon None.
+    Le modèle invente parfois un nom (ex. Pizza Hut) : on ne le garde que s'il a été dit."""
+    t = _norm(text)
+    for cle, marque in BRANDS.items():
+        if re.search(rf"\b{cle}\b", t):
+            return marque
+    nom = clean_nom(nom_modele)
+    if nom and _norm(nom) and _norm(nom) in t:
+        return nom
+    return None
+
+
 def detect_category(text):
     """Devine la catégorie de lieu à partir de mots-clés (None si rien de clair)."""
     t = text.lower()
@@ -212,6 +238,7 @@ class Brain:
         self.position = None
         self._last_pos = None
         self._links = None
+        self._fini = False  # True quand un itinéraire final vient d'être donné
 
     def handle(self, text):
         """Retourne un dictionnaire avec les clés reply, links et end."""
@@ -278,6 +305,7 @@ class Brain:
         trip = self.trip
         trip["destination"] = items[0]["destination"]
         trip["origin"], trip["origin_gps"] = "", bool(self._pos())
+        self._fini = False
         STATE.clear()
         return self._annoncer_trajet()
 
@@ -292,6 +320,7 @@ class Brain:
         if not trip["destination"]:
             return f"D'accord, tu pars de {self._origin_label()}. Où est-ce que tu vas ?"
         if not self._origin_value():
+            etat["pending"] = "fix_origin"
             return f"D'accord, direction {trip['destination']}. Tu pars d'où ?"
 
         # On vérifie que les lieux cités existent (la position GPS, elle, est déjà fiable)
@@ -335,6 +364,7 @@ class Brain:
                        **res["links"]}
         historique.add(trip["destination"], self._origin_label())
         self._links["final"] = True
+        self._fini = True
         STATE.clear()
         return "Ton itinéraire est prêt. Bonne route !"
 
@@ -345,6 +375,7 @@ class Brain:
         self._links = {"titre": f"Via {res['arret']} ({res['adresse']})", **res["links"]}
         historique.add(self.trip["destination"], self._origin_label(), res["arret"])
         self._links["final"] = True
+        self._fini = True
         STATE.clear()
         return f"C'est noté, on passe par {res['arret']}. Ton itinéraire est prêt."
 
@@ -360,12 +391,13 @@ class Brain:
         print(f"[recherche : {time.time() - t1:.1f} s]")
 
         if res.get("code") == "none":
+            quoi = nom or "lieu de ce type"
             if category:  # on propose de chercher sans l'enseigne
                 self.etat["pending"] = "ask_generic"
                 self.etat["last_category"] = category
-                return (f"Je n'ai pas trouvé de {nom} sur ton trajet. "
+                return (f"Je n'ai pas trouvé de {quoi} sur ton trajet. "
                         "Tu veux que je cherche autre chose du même type ?")
-            return f"Je n'ai pas trouvé de {nom} sur ton trajet."
+            return f"Je n'ai pas trouvé de {quoi} sur ton trajet."
         if "error" in res:
             print(f"[recherche : {res['error']}]")
             return "Je n'ai rien trouvé pour l'instant, on réessaie ?"
@@ -449,10 +481,29 @@ class Brain:
         print(f"[modèle : {out}]")
         action = out.get("action", "autre")
 
-        # Demande d'arrêt courte que le modèle n'a pas reconnue (par exemple : Un restaurant.)
         cat_kw = detect_category(t)
+        category = out.get("category") if out.get("category") in CATEGORIES else cat_kw
+        nom = enseigne(heard, out.get("nom"))  # seulement une enseigne réellement prononcée
+
+        # Demande d'arrêt courte que le modèle n'a pas reconnue (par exemple : Un restaurant.)
         if action == "autre" and cat_kw and trip["destination"] and len(words) <= 8:
             action = "chercher"
+
+        # « Emmène-moi à Stade Charléty » mal transcrit puis classé en recherche :
+        # pas de type de lieu, pas d'enseigne connue -> c'est une destination
+        if action == "chercher" and not category and nom and nom not in BRANDS.values():
+            print(f"[recherche reclassée en trajet : {nom!r}]")
+            action = "trajet"
+            out["destination"] = out.get("destination") or (out.get("nom") or "").strip()
+            nom = None
+
+        # « Emmène-moi à Porte de Choisy » classé en recherche : une destination sans type de lieu
+        # ni enseigne prononcés, c'est un trajet. On y va d'abord, l'arrêt se propose ensuite.
+        dest_modele = (out.get("destination") or "").strip()
+        if (action == "chercher" and dest_modele and not nom
+                and (not category or (TRAJET.search(t) and not cat_kw))):
+            print(f"[recherche reclassée en trajet : {dest_modele!r}]")
+            action = "trajet"
 
         origin = (out.get("origin") or "").strip()
         dest = (out.get("destination") or "").strip()
@@ -464,6 +515,10 @@ class Brain:
                        or (from_here and not trip["origin_gps"]))
 
         if action in ("trajet", "chercher"):
+            # Nouveau trajet après un itinéraire terminé : on ne reprend pas l'ancien départ
+            if self._fini and action == "trajet" and dest and not origin and not from_here:
+                trip["origin"], trip["origin_gps"] = "", False
+            self._fini = False
             if from_here:
                 trip["origin"], trip["origin_gps"] = "", True
             elif origin:
@@ -483,10 +538,6 @@ class Brain:
             return self._annoncer_trajet()
 
         if action == "chercher":
-            category = out.get("category")
-            if category not in CATEGORIES:
-                category = cat_kw  # le modèle n'a pas trouvé : on déduit par mots-clés
-            nom = clean_nom(out.get("nom"))
             if not category and not nom:
                 if pending == "ask_category":
                     etat["reasks"] += 1
