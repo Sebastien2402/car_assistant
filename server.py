@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 import historique
 from brain import Brain, warm_up
 from lieux import PROMPT_WHISPER
+from poi_local import places_in_box
 from tools import STATE, build_map
 from voice import VOCAB, _clean, _stt, _synth
 
@@ -242,6 +243,19 @@ def get_history():
 def clear_history():
     historique.clear()
     return {"ok": True}
+
+
+# Types de lieux affichables sur la carte (points de couleur)
+MAP_POI_CATEGORIES = {"restaurant", "fast_food", "cafe", "fuel", "pharmacy"}
+
+
+@app.get("/api/pois", dependencies=[Depends(check)])
+def get_pois(s: float, w: float, n: float, e: float, cat: str = "restaurant,fast_food", limit: int = 1500):
+    """Lieux visibles dans la zone affichée (limitée pour ne pas surcharger la carte)."""
+    if n - s > 0.8 or e - w > 1.2:  # zone vraiment trop grande (carte très dézoomée)
+        return {"items": [], "too_wide": True}
+    cats = [c for c in cat.split(",") if c in MAP_POI_CATEGORIES]
+    return {"items": places_in_box(s, w, n, e, cats, limit=max(50, min(limit, 1500)))}
 
 
 @app.post("/api/reroute", dependencies=[Depends(check)])

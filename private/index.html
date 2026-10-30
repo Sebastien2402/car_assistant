@@ -6,183 +6,415 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#16181c">
 <link rel="manifest" href="/static/manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <title>Copilote</title>
 <style>
-  :root { color-scheme: dark; --bg:#0b0f14; --card:#141b24; --txt:#e8eef5; --muted:#8a97a8;
-          --accent:#3b82f6; --rec:#ef4444; --ok:#22c55e; }
+  :root {
+    color-scheme: dark;
+    --bg: #16181c;
+    --map-bg: #1b1e23;
+    --glass: rgba(30, 33, 39, .80);
+    --glass-2: rgba(255, 255, 255, .06);
+    --glass-3: rgba(255, 255, 255, .10);
+    --line: rgba(255, 255, 255, .08);
+    --line-2: rgba(255, 255, 255, .14);
+    --txt: #eef1f5;
+    --muted: #8d949e;
+    --accent: #4cc9f0;
+    --accent-2: #7b61ff;
+    --grad: linear-gradient(135deg, #4cc9f0 0%, #7b61ff 100%);
+    --rec: #ff4d6d;
+    --ok: #2ee6a6;
+    --warn: #ffb547;
+    --shadow: 0 12px 32px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .05);
+    --font: "Inter", -apple-system, system-ui, sans-serif;
+    --display: "Sora", "Inter", -apple-system, system-ui, sans-serif;
+    --st: env(safe-area-inset-top, 0px);
+    --sb: env(safe-area-inset-bottom, 0px);
+    --sheet-h: 150px;
+    --gbar-h: 68px;
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   [hidden] { display: none !important; }
-  html, body { height: 100%; margin: 0; overscroll-behavior: none; }
-  button { touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  body { background: var(--bg); color: var(--txt); display: flex; flex-direction: column;
-         height: 100vh; height: 100dvh; font: 16px/1.4 -apple-system, system-ui, sans-serif;
-         padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; }
-  header h1 { font-size: 18px; margin: 0; }
-  #gps { font-size: 13px; color: var(--muted); }
-  #gps.ok { color: var(--ok); }
+  html, body { height: 100%; margin: 0; overscroll-behavior: none; overflow: hidden; }
+  body { background: var(--bg); color: var(--txt); font: 15px/1.45 var(--font);
+         height: 100vh; height: 100dvh; -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation;
+           -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  svg.i { width: 20px; height: 20px; display: block; flex: 0 0 auto; }
 
-  #mapwrap { position: relative; flex: 1 1 auto; min-height: 0; background: #1b2430; overflow: hidden; }
-  #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; color: #111; }
+  /* Panneaux en verre dépoli */
+  .glass { background: var(--glass); border: 1px solid var(--line); box-shadow: var(--shadow);
+           -webkit-backdrop-filter: blur(20px) saturate(150%); backdrop-filter: blur(20px) saturate(150%); }
+
+  /* ---------- Carte plein écran ---------- */
+  #mapwrap { position: fixed; inset: 0; background: var(--map-bg); overflow: hidden; }
+  #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+  .leaflet-container { background: var(--map-bg); font-family: var(--font); }
+  /* Tuiles OpenStreetMap passées en mode sombre gris (aucune clé nécessaire) */
+  .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) grayscale(.75) brightness(.9) contrast(.9); }
+  #map.nomap { display: flex; align-items: center; justify-content: center; color: var(--muted); }
   /* Mode GPS : la carte (agrandie) tourne autour de la position, la flèche reste fixe */
   #map.rot { transform-origin: 50% 50%; will-change: transform; transition: transform .8s linear; }
   #map.rot .pin { transform: rotate(var(--unrot, 0deg)); transition: transform .8s linear; }
   #map.rot .leaflet-tooltip { display: none; }
-  #car { position: absolute; left: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; z-index: 900;
-         pointer-events: none; filter: drop-shadow(0 2px 4px rgba(0,0,0,.55)); }
+  .leaflet-tooltip { background: var(--glass); color: var(--txt); border: 1px solid var(--line-2);
+                     border-radius: 10px; box-shadow: var(--shadow); font: 600 13px var(--font); padding: 5px 9px; }
+  .leaflet-tooltip::before { display: none; }
+  .leaflet-popup-content-wrapper { background: var(--glass); color: var(--txt); border: 1px solid var(--line-2);
+                                   border-radius: 16px; box-shadow: var(--shadow);
+                                   -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+  .leaflet-popup-tip { background: rgba(30, 33, 39, .95); }
+  .leaflet-popup-content { margin: 11px 14px; font: 13px/1.4 var(--font); }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  .poi-pop b { display: block; font-size: 14.5px; margin-right: 14px; }
+  .poi-pop .tag { display: inline-block; margin: 3px 0 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+                  font-weight: 600; color: #16181c; background: #ffd23f; }
+  .poi-pop .muted { color: var(--muted); }
+
+  #car { position: absolute; left: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; z-index: 900;
+         pointer-events: none; filter: drop-shadow(0 0 14px rgba(76, 201, 240, .55)) drop-shadow(0 4px 6px rgba(0, 0, 0, .5)); }
   #car svg { width: 100%; height: 100%; display: block; }
-  #attr { position: absolute; right: 4px; bottom: 2px; z-index: 800; font-size: 10px; line-height: 14px;
-          padding: 0 4px; background: rgba(255,255,255,.75); color: #333; border-radius: 3px; }
+
+  #attr { position: absolute; right: 18px; bottom: calc(var(--sheet-h) + var(--sb) + 18px); z-index: 800;
+          font-size: 10px; line-height: 16px; padding: 0 7px; border-radius: 999px;
+          background: rgba(22, 24, 28, .65); color: var(--muted); }
   #attr a { color: inherit; }
-  body.guiding #attr { bottom: 72px; }
+  body.guiding #attr { right: auto; bottom: auto; left: 16px; top: calc(var(--st) + 10px + 102px + 8px); }
 
-  #info { position: absolute; top: 10px; left: 10px; z-index: 1000; max-width: 70%;
-          background: rgba(11,15,20,.88); padding: 8px 12px; border-radius: 12px; font-weight: 600; font-size: 15px; }
-  #tools { position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
-  body.guiding #tools { top: 122px; }
-  #tools button { width: 44px; height: 44px; border-radius: 50%; border: none; background: #fff; color: #111;
-                  font-size: 20px; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
-  #tools button.on { background: #2563eb; color: #fff; }
+  /* ---------- En-tête ---------- */
+  header { position: absolute; z-index: 1000; top: calc(var(--st) + 12px); left: 12px; right: 12px;
+           display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           padding: 9px 10px 9px 10px; border-radius: 22px; }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .logo { width: 36px; height: 36px; border-radius: 12px; background: var(--grad); display: grid; place-items: center;
+          box-shadow: 0 6px 18px rgba(76, 201, 240, .35), inset 0 1px 0 rgba(255, 255, 255, .35); color: #fff; }
+  .logo svg { width: 20px; height: 20px; }
+  header h1 { margin: 0; font: 600 16px/1.1 var(--display); letter-spacing: .2px; }
+  header .sub { font-size: 11.5px; color: var(--muted); }
+  #gps { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px;
+         font-size: 12px; font-weight: 600; color: var(--muted); background: var(--glass-2); border: 1px solid var(--line);
+         white-space: nowrap; }
+  #gps::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  #gps.ok { color: var(--txt); }
+  #gps.ok::before { background: var(--ok); box-shadow: 0 0 0 3px rgba(46, 230, 166, .18), 0 0 10px var(--ok); }
 
-  #guide { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1000; height: 102px; display: flex; gap: 10px;
-           align-items: center; background: rgba(11,15,20,.93); border-radius: 16px; padding: 8px 12px; overflow: hidden; }
-  #gicon { font-size: 40px; line-height: 1; width: 48px; text-align: center; flex: 0 0 auto; }
+  /* Résumé de l'itinéraire */
+  #info { position: absolute; z-index: 1000; top: calc(var(--st) + 82px); left: 12px; max-width: calc(100% - 92px);
+          display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 16px;
+          font: 600 14px var(--font); }
+  #info::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--grad); flex: 0 0 auto;
+                  box-shadow: 0 0 10px var(--accent); }
+
+  /* Boutons de carte */
+  #tools { position: absolute; z-index: 1000; top: calc(var(--st) + 82px); right: 12px; display: flex; flex-direction: column;
+           gap: 2px; padding: 5px; border-radius: 18px; }
+  body.guiding #tools { top: calc(var(--st) + 10px + 102px + 12px); }
+  #tools button { width: 42px; height: 42px; border: none; border-radius: 13px; background: transparent;
+                  display: grid; place-items: center; transition: background .2s, color .2s; }
+  #tools button:active { background: var(--glass-3); }
+  #tools button.on { color: var(--accent); background: rgba(76, 201, 240, .14); }
+  #tools .sep { height: 1px; margin: 3px 8px; background: var(--line); }
+
+  /* ---------- Guidage ---------- */
+  #guide { position: absolute; z-index: 1000; top: calc(var(--st) + 10px); left: 12px; right: 12px; height: 102px;
+           display: flex; align-items: center; gap: 14px; padding: 12px 16px 12px 12px; border-radius: 26px; overflow: hidden; }
+  #gicon { width: 78px; height: 78px; flex: 0 0 auto; border-radius: 20px; background: var(--grad); color: #fff;
+           display: grid; place-items: center;
+           box-shadow: 0 10px 26px rgba(76, 201, 240, .35), inset 0 1px 0 rgba(255, 255, 255, .35); }
+  #gicon svg { width: 46px; height: 46px; }
   #gtext { flex: 1; min-width: 0; }
-  #gdist { font-size: 25px; line-height: 1.1; font-weight: 700; }
-  #ginstr { font-size: 16px; line-height: 1.2; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical; overflow: hidden; }
-  #groad { font-size: 12px; line-height: 1.3; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #gbar { position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 1000; display: flex;
-          align-items: center; gap: 10px; background: rgba(11,15,20,.93); border-radius: 14px; padding: 10px 12px; }
-  #geta { flex: 1; font-weight: 600; }
-  #gbar button { border: none; border-radius: 10px; padding: 10px 14px; font-size: 15px; font-weight: 600;
-                 background: #2a3544; color: var(--txt); }
-  #gstop { background: #b91c1c !important; color: #fff; }
-  #simbar { position: absolute; left: 10px; bottom: 68px; z-index: 1000; display: flex; gap: 8px; }
-  #simbar button { border: none; border-radius: 20px; padding: 8px 12px; font-size: 13px; font-weight: 600;
-                   background: rgba(11,15,20,.9); color: var(--txt); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+  #gdist { font: 700 30px/1.05 var(--display); letter-spacing: -.5px; }
+  #ginstr { font-size: 16px; line-height: 1.25; font-weight: 600; margin-top: 2px; display: -webkit-box;
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  #groad { font-size: 12px; line-height: 1.35; color: var(--muted); margin-top: 2px;
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  #spd { position: absolute; left: 10px; bottom: 108px; z-index: 1000; width: 62px; height: 62px; border-radius: 50%;
-         background: rgba(11,15,20,.93); border: 3px solid #fff; display: flex; flex-direction: column;
-         align-items: center; justify-content: center; line-height: 1; box-shadow: 0 2px 8px rgba(0,0,0,.35); }
-  #spd b { font-size: 22px; }
-  #spd small { font-size: 10px; color: var(--muted); margin-top: 2px; }
-  #toast { position: absolute; top: 122px; left: 10px; right: 66px; z-index: 1100; background: rgba(11,15,20,.94);
-           border-radius: 12px; padding: 8px 12px; font-size: 14px; }
-  .pin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid #fff; color: #fff; font-weight: 700;
-         display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
-  .pin.start { background: #16a34a; } .pin.stop { background: #f59e0b; } .pin.end { background: #dc2626; }
-  .me { width: 26px; height: 26px; border-radius: 50%; background: #2563eb; border: 3px solid #fff; color: #fff;
-        box-shadow: 0 0 0 2px rgba(37,99,235,.45); display: flex; align-items: center; justify-content: center;
-        font-size: 12px; }
+  #gbar { position: absolute; z-index: 1000; left: 12px; right: 12px; bottom: calc(var(--sb) + 12px); height: var(--gbar-h);
+          display: flex; align-items: center; gap: 8px; padding: 0 10px 0 18px; border-radius: 24px; }
+  #geta { flex: 1; min-width: 0; display: flex; gap: 16px; align-items: center; }
+  .eta { display: flex; flex-direction: column; line-height: 1.1; flex: 0 0 auto; }
+  .eta + .eta { flex: 0 1 auto; min-width: 0; }
+  .eta b { font: 700 18px var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .eta b.hl { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .eta small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-top: 3px; }
+  #gbar button { height: 46px; border: 1px solid var(--line); border-radius: 15px; background: var(--glass-2);
+                 display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+  #gmute { width: 46px; }
+  #gstop { padding: 0 15px; font-weight: 700; border: none !important; color: #fff;
+           background: linear-gradient(135deg, #ff4d6d, #ff7a59) !important; box-shadow: 0 6px 18px rgba(255, 77, 109, .35); }
 
-  #log { flex: 0 0 auto; max-height: 20vh; overflow-y: auto; padding: 8px 14px; display: flex;
-         flex-direction: column; gap: 6px; }
+  #simbar { position: absolute; z-index: 1000; left: 12px; bottom: calc(var(--sb) + var(--gbar-h) + 22px); display: flex; gap: 8px; }
+  #simbar button { height: 38px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+                   display: inline-flex; align-items: center; gap: 6px; }
+  #simbar svg.i { width: 16px; height: 16px; }
+
+  #spd { position: absolute; z-index: 1000; left: 12px; bottom: calc(var(--sb) + var(--gbar-h) + 72px);
+         width: 70px; height: 70px; border-radius: 50%; display: flex; flex-direction: column;
+         align-items: center; justify-content: center; line-height: 1;
+         border: 3px solid transparent;
+         background: linear-gradient(rgba(26, 29, 34, .92), rgba(26, 29, 34, .92)) padding-box, var(--grad) border-box;
+         box-shadow: 0 10px 26px rgba(0, 0, 0, .45), 0 0 18px rgba(76, 201, 240, .2); }
+  #spd b { font: 700 23px var(--display); }
+  #spd small { font-size: 10px; color: var(--muted); margin-top: 3px; letter-spacing: .5px; }
+
+  #toast { position: absolute; z-index: 1100; top: calc(var(--st) + 10px + 102px + 12px); left: 12px; right: 74px;
+           padding: 11px 14px; border-radius: 18px; font-size: 14px; animation: rise .25s ease-out; }
+
+  /* Marqueurs */
+  .pin { width: 32px; height: 32px; border-radius: 50%; border: 3px solid #16181c; color: #0f1115; font: 800 13px var(--font);
+         display: flex; align-items: center; justify-content: center; }
+  .pin.start { background: var(--ok); box-shadow: 0 0 0 4px rgba(46, 230, 166, .25), 0 4px 10px rgba(0, 0, 0, .5); }
+  .pin.stop { background: var(--warn); box-shadow: 0 0 0 4px rgba(255, 181, 71, .25), 0 4px 10px rgba(0, 0, 0, .5); }
+  .pin.end { background: var(--rec); color: #fff; box-shadow: 0 0 0 4px rgba(255, 77, 109, .25), 0 4px 10px rgba(0, 0, 0, .5); }
+  .me { position: relative; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); border: 3px solid #fff;
+        color: #0f1115; display: flex; align-items: center; justify-content: center; font-size: 10px;
+        box-shadow: 0 0 14px rgba(76, 201, 240, .8); }
+  .me::after { content: ""; position: absolute; inset: -9px; border-radius: 50%; border: 2px solid rgba(76, 201, 240, .5);
+               animation: halo 2s ease-out infinite; }
+
+  /* ---------- Panneau du bas : conversation + micro ---------- */
+  #sheet { position: absolute; z-index: 1200; left: 12px; right: 12px; bottom: calc(var(--sb) + 12px);
+           display: flex; flex-direction: column; padding: 16px 14px 14px; border-radius: 28px;
+           max-height: calc(100dvh - var(--st) - var(--sb) - 100px); }
+  #sheet::before { content: ""; position: absolute; top: 7px; left: 50%; width: 38px; height: 4px; margin-left: -19px;
+                   border-radius: 4px; background: var(--line-2); }
+  #log { flex: 0 1 auto; max-height: 26vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+         padding: 2px 2px 12px; scrollbar-width: none;
+         -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+         mask-image: linear-gradient(to bottom, transparent 0, #000 14px); }
+  #log::-webkit-scrollbar { display: none; }
   #log:empty { display: none; }
-  /* Pendant le guidage : carte plein écran, micro flottant */
-  body.guiding header, body.guiding #log { display: none; }
-  body.guiding footer { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 84px); padding: 0; z-index: 1300; }
-  body.guiding #status, body.guiding #optbtn, body.guiding #options { display: none; }
-  body.guiding #mic { width: 64px; height: 64px; font-size: 28px; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
-  .msg { max-width: 90%; padding: 8px 12px; border-radius: 14px; background: var(--card); font-size: 15px; }
-  .msg.user { align-self: flex-end; background: #1d3a66; }
-  .msg.sys { align-self: center; color: var(--muted); font-size: 13px; background: none; text-align: center; }
+  .msg { max-width: 86%; padding: 9px 13px; border-radius: 18px; font-size: 15px; animation: rise .25s ease-out;
+         overflow-wrap: anywhere; }
+  .msg.bot { align-self: flex-start; background: var(--glass-2); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+  .msg.user { align-self: flex-end; background: var(--grad); color: #fff; border-bottom-right-radius: 6px;
+              box-shadow: 0 6px 18px rgba(123, 97, 255, .25); }
+  .msg.sys { align-self: center; max-width: 100%; padding: 4px 12px; font-size: 12.5px; color: var(--muted);
+             background: rgba(255, 255, 255, .03); border: 1px solid var(--line); border-radius: 999px; text-align: center; }
 
-  footer { padding: 10px 14px 12px; }
+  footer { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  /* Options ouvertes : elles remplacent la conversation dans le panneau */
+  #sheet.opts #log { display: none; }
   .mainrow { display: flex; align-items: center; gap: 14px; }
-  #mic { width: 72px; height: 72px; flex: 0 0 auto; border-radius: 50%; border: none; color: #fff;
-         background: var(--accent); font-size: 32px; display: flex; align-items: center; justify-content: center;
-         touch-action: manipulation; user-select: none; -webkit-user-select: none; }
-  body[data-state=recording] #mic { background: var(--rec); animation: pulse 1.2s infinite; }
-  body[data-state=processing] #mic { background: #475569; }
-  body[data-state=speaking] #mic { background: var(--ok); }
-  @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.07); } }
-  #status { flex: 1; font-weight: 600; }
-  #optbtn { background: none; border: 1px solid #2a3544; color: var(--muted); border-radius: 10px;
-            width: 44px; height: 44px; font-size: 20px; }
-  #options { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; color: var(--muted); font-size: 14px;
-             max-height: 38vh; overflow-y: auto; }
-  #options .row { display: flex; gap: 8px; align-items: center; }
-  #reset, #simbtn { align-self: flex-start; background: none; border: 1px solid #2a3544; color: var(--muted);
-           border-radius: 10px; padding: 8px 12px; font-size: 14px; }
-  #tf { display: flex; gap: 8px; }
-  #ti { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid #2a3544; background: var(--card);
-        color: var(--txt); font-size: 16px; }
-  #tf button { padding: 10px 14px; border-radius: 10px; border: none; background: #2a3544; color: var(--txt); }
 
-  #hist { display: flex; flex-direction: column; gap: 6px; }
-  .hhead { color: var(--muted); font-size: 13px; }
+  /* Bouton micro */
+  #mic { --lvl: 0; position: relative; width: 74px; height: 74px; flex: 0 0 auto; border-radius: 50%; border: none;
+         color: #fff; background: var(--grad); display: grid; place-items: center;
+         box-shadow: 0 12px 30px rgba(76, 201, 240, .35), inset 0 1px 0 rgba(255, 255, 255, .35);
+         transition: transform .15s, background .3s; }
+  #mic:active { transform: scale(.95); }
+  #mic svg { width: 30px; height: 30px; position: relative; z-index: 2; }
+  #mic::before, #mic::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; }
+  #mic::before { inset: -7px; border: 2px solid rgba(76, 201, 240, .35); }
+  #mic::after { inset: 0; z-index: 1; opacity: 0; }
+  body[data-state=recording] #mic { background: linear-gradient(135deg, #ff4d6d, #ff7a59);
+                                    box-shadow: 0 12px 30px rgba(255, 77, 109, .45); }
+  body[data-state=recording] #mic::before { border-color: rgba(255, 77, 109, .55); animation: ripple 1.4s ease-out infinite; }
+  body[data-state=recording] #mic::after { inset: -4px; opacity: 1; background: rgba(255, 77, 109, .28);
+                                           transform: scale(calc(1 + var(--lvl) * .45)); transition: transform .08s linear; z-index: 0; }
+  body[data-state=processing] #mic { background: #2a2e35; box-shadow: 0 10px 26px rgba(0, 0, 0, .4); }
+  body[data-state=processing] #mic::before { inset: -6px; border: 3px solid transparent; border-top-color: var(--accent);
+                                             border-right-color: var(--accent-2); animation: spin .9s linear infinite; }
+  body[data-state=speaking] #mic { background: linear-gradient(135deg, #2ee6a6, #4cc9f0);
+                                   box-shadow: 0 12px 30px rgba(46, 230, 166, .4); }
+  body[data-state=speaking] #mic::before { border-color: rgba(46, 230, 166, .5); animation: breathe 1.6s ease-in-out infinite; }
+
+  .stat { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  #status { font-weight: 600; font-size: 15px; line-height: 1.25; }
+  .wave { display: flex; align-items: center; gap: 3px; height: 16px; }
+  .wave i { width: 3px; height: 4px; border-radius: 3px; background: var(--muted); opacity: .5; }
+  body[data-state=recording] .wave i { background: var(--rec); opacity: 1; animation: bar .8s ease-in-out infinite; }
+  body[data-state=speaking] .wave i { background: var(--ok); opacity: 1; animation: bar .9s ease-in-out infinite; }
+  body[data-state=processing] .wave i { background: var(--accent); opacity: 1; animation: dot 1.2s ease-in-out infinite; }
+  .wave i:nth-child(2) { animation-delay: .1s !important; } .wave i:nth-child(3) { animation-delay: .2s !important; }
+  .wave i:nth-child(4) { animation-delay: .3s !important; } .wave i:nth-child(5) { animation-delay: .4s !important; }
+
+  #optbtn { width: 48px; height: 48px; flex: 0 0 auto; border-radius: 16px; border: 1px solid var(--line);
+            background: var(--glass-2); display: grid; place-items: center; transition: background .2s, transform .25s; }
+  #optbtn.on { background: rgba(76, 201, 240, .14); color: var(--accent); transform: rotate(90deg); }
+
+  /* Options */
+  #options { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column;
+             gap: 14px; min-height: 0; max-height: 52vh; overflow-y: auto; animation: rise .2s ease-out; }
+  .switch { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px;
+            background: var(--glass-2); border: 1px solid var(--line); font-size: 14px; }
+  .switch span { flex: 1; }
+  .switch small { display: block; color: var(--muted); font-size: 12px; }
+  .switch input { appearance: none; -webkit-appearance: none; margin: 0; position: relative; width: 46px; height: 28px;
+                  flex: 0 0 auto; border-radius: 999px; background: var(--glass-3); border: 1px solid var(--line-2);
+                  transition: background .25s; cursor: pointer; }
+  .switch input::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+                          background: #fff; transition: transform .25s; box-shadow: 0 2px 6px rgba(0, 0, 0, .35); }
+  .switch input:checked { background: var(--grad); border-color: transparent; }
+  .switch input:checked::before { transform: translateX(18px); }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .act { display: flex; align-items: center; gap: 9px; padding: 12px; border-radius: 16px; border: 1px solid var(--line);
+         background: var(--glass-2); color: var(--txt); font-size: 13.5px; font-weight: 600; text-decoration: none; text-align: left; }
+  .act:active { background: var(--glass-3); }
+  .act svg.i { width: 18px; height: 18px; color: var(--accent); }
+  .act.wide { grid-column: 1 / -1; }
+  .act.danger svg.i { color: var(--rec); }
+
+  #hist { display: flex; flex-direction: column; gap: 8px; }
+  .hhead { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
   #histlist { display: flex; flex-direction: column; gap: 6px; }
-  .hitem { text-align: left; background: var(--card); color: var(--txt); border: 1px solid #2a3544;
-           border-radius: 10px; padding: 10px 12px; font-size: 15px; }
-  #histclear { align-self: flex-start; background: none; border: none; color: var(--muted);
-               font-size: 13px; text-decoration: underline; padding: 0; }
+  .hitem { display: flex; align-items: center; gap: 10px; text-align: left; background: rgba(255, 255, 255, .03);
+           border: 1px solid var(--line); border-radius: 14px; padding: 11px 13px; font-size: 14.5px; }
+  .hitem::before { content: ""; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--grad); }
+  .hitem:active { background: var(--glass-3); }
+  #histclear { align-self: flex-start; background: none; border: none; color: var(--muted); font-size: 12.5px;
+               text-decoration: underline; text-underline-offset: 3px; padding: 0; }
+
+  #tf { display: flex; gap: 8px; }
+  #ti { flex: 1; min-width: 0; height: 48px; padding: 0 14px; border-radius: 16px; border: 1px solid var(--line);
+        background: rgba(0, 0, 0, .25); color: var(--txt); font: 16px var(--font); }
+  #ti::placeholder { color: var(--muted); }
+  #tf button { width: 48px; height: 48px; flex: 0 0 auto; border: none; border-radius: 16px; background: var(--grad);
+               color: #fff; display: grid; place-items: center; }
+
+  /* Pendant le guidage : carte plein écran, micro flottant */
+  body.guiding header, body.guiding #log, body.guiding #info { display: none; }
+  body.guiding #sheet { background: none; border: none; box-shadow: none; padding: 0;
+                        -webkit-backdrop-filter: none; backdrop-filter: none; pointer-events: none; }
+  body.guiding #sheet::before, body.guiding .stat, body.guiding #optbtn, body.guiding #options { display: none; }
+  body.guiding footer { position: fixed; right: 12px; bottom: calc(var(--sb) + var(--gbar-h) + 24px);
+                        z-index: 1300; pointer-events: auto; }
+  body.guiding #mic { width: 64px; height: 64px; }
+  body.guiding #mic svg { width: 26px; height: 26px; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes ripple { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.35); opacity: 0; } }
+  @keyframes breathe { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.12); opacity: .4; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes halo { 0% { transform: scale(.6); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
+  @keyframes bar { 0%, 100% { height: 4px; } 50% { height: 16px; } }
+  @keyframes dot { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+  }
+  @media (max-width: 440px) {
+    #gstop { width: 46px; padding: 0; }
+    #gstop span { display: none; }
+  }
+  @media (min-width: 640px) {
+    #sheet { left: auto; width: 420px; }
+    #attr { right: 448px; }
+  }
 </style>
 </head>
 <body data-state="idle">
-<header>
-  <h1>Copilote</h1>
-  <span id="gps">GPS …</span>
-</header>
-
 <div id="mapwrap">
   <div id="map"></div>
   <div id="car" hidden>
-    <svg viewBox="0 0 24 24"><path d="M12 2 L20.5 21.5 L12 17 L3.5 21.5 Z" fill="#2563eb" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>
+    <svg viewBox="0 0 24 24">
+      <defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4cc9f0"/><stop offset="1" stop-color="#7b61ff"/></linearGradient></defs>
+      <path d="M12 2 L20.5 21.5 L12 17 L3.5 21.5 Z" fill="url(#cg)" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+    </svg>
   </div>
   <div id="attr">© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a></div>
-  <div id="info" hidden></div>
-  <div id="spd" hidden><b id="spdv">–</b><small>km/h</small></div>
-  <div id="toast" hidden></div>
-  <div id="guide" hidden>
-    <div id="gicon">↑</div>
+
+  <header class="glass">
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 L20 21 L12 16.5 L4 21 Z"/></svg></div>
+      <div><h1>Copilote</h1><div class="sub">Assistant de conduite</div></div>
+    </div>
+    <span id="gps">GPS…</span>
+  </header>
+
+  <div id="info" class="glass" hidden></div>
+  <div id="spd" hidden><b id="spdv">–</b><small>KM/H</small></div>
+  <div id="toast" class="glass" hidden></div>
+  <div id="guide" class="glass" hidden>
+    <div id="gicon"></div>
     <div id="gtext">
       <div id="gdist"></div>
       <div id="ginstr"></div>
       <div id="groad"></div>
     </div>
   </div>
-  <div id="tools">
-    <button id="fit" type="button" aria-label="Voir tout l'itinéraire">⤢</button>
-    <button id="follow" type="button" aria-label="Suivre ma position">◎</button>
-    <button id="zin" type="button" aria-label="Zoom avant">＋</button>
-    <button id="zout" type="button" aria-label="Zoom arrière">−</button>
+  <div id="tools" class="glass">
+    <button id="fit" type="button" aria-label="Voir tout l'itinéraire">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+    </button>
+    <button id="follow" type="button" aria-label="Suivre ma position">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+    </button>
+    <button id="poibtn" class="on" type="button" aria-label="Afficher les restaurants">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8M4.5 3v5a2.5 2.5 0 0 0 5 0V3M7 11v10"/><path d="M17 21V3c-2.2 1.2-3.5 3.6-3.5 7v3H17"/></svg>
+    </button>
+    <div class="sep"></div>
+    <button id="zin" type="button" aria-label="Zoom avant">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <button id="zout" type="button" aria-label="Zoom arrière">
+      <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+    </button>
   </div>
   <div id="simbar" hidden>
-    <button id="gsim" type="button">▶ Simuler</button>
-    <button id="gspeed" type="button">⏩ ×4</button>
+    <button id="gsim" class="glass" type="button"></button>
+    <button id="gspeed" class="glass" type="button"></button>
   </div>
-  <div id="gbar" hidden>
+  <div id="gbar" class="glass" hidden>
     <div id="geta"></div>
-    <button id="gmute" type="button" aria-label="Son">🔊</button>
-    <button id="gstop" type="button">Arrêter</button>
+    <button id="gmute" type="button" aria-label="Son"></button>
+    <button id="gstop" type="button" aria-label="Arrêter le guidage">
+      <svg class="i" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span>Arrêter</span>
+    </button>
+  </div>
+
+  <div id="sheet" class="glass">
+    <div id="log"></div>
+    <footer>
+      <div class="mainrow">
+        <button id="mic" type="button" aria-label="Parler">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="12" rx="3" fill="currentColor"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+        </button>
+        <div class="stat">
+          <div id="status">Appuyer pour parler</div>
+          <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+        <button id="optbtn" type="button" aria-label="Options">
+          <svg class="i" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+        </button>
+      </div>
+      <div id="options" hidden>
+        <label class="switch">
+          <span>Mains libres<small>Relance l'écoute après chaque réponse</small></span>
+          <input type="checkbox" id="hf">
+        </label>
+        <div class="actions">
+          <button id="reset" class="act" type="button">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Nouvelle conversation
+          </button>
+          <button id="simbtn" class="act" type="button">
+            <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>Simuler le trajet
+          </button>
+          <a href="/logout" class="act wide danger">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>Verrouiller l'application
+          </a>
+        </div>
+        <div id="hist" hidden>
+          <div class="hhead">Derniers trajets</div>
+          <div id="histlist"></div>
+          <button id="histclear" type="button">Effacer l'historique</button>
+        </div>
+        <form id="tf">
+          <input id="ti" placeholder="Saisie au clavier (test)" autocomplete="off">
+          <button type="submit" aria-label="Envoyer">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+      </div>
+    </footer>
   </div>
 </div>
-
-<div id="log"></div>
-
-<footer>
-  <div class="mainrow">
-    <button id="mic" type="button" aria-label="Parler">🎙</button>
-    <div id="status">Appuyer pour parler</div>
-    <button id="optbtn" type="button" aria-label="Options">⋯</button>
-  </div>
-  <div id="options" hidden>
-    <label class="row"><input type="checkbox" id="hf"> Mains libres (relance l'écoute après chaque réponse)</label>
-    <button id="reset" type="button">Nouvelle conversation</button>
-    <button id="simbtn" type="button">Simuler le trajet (test)</button>
-    <a href="/logout" style="color:inherit">Verrouiller l'application</a>
-    <div id="hist" hidden>
-      <div class="hhead">Derniers trajets</div>
-      <div id="histlist"></div>
-      <button id="histclear" type="button">Effacer l'historique</button>
-    </div>
-    <form id="tf"><input id="ti" placeholder="Saisie au clavier (test)" autocomplete="off"><button>OK</button></form>
-  </div>
-</footer>
 <audio id="player" playsinline></audio>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -194,9 +426,6 @@
   const LABELS = { idle: "Appuyer pour parler", recording: "J'écoute… (toucher pour terminer)",
                    processing: "Je réfléchis…", speaking: "Je parle… (toucher pour couper)" };
   const PIN = { start: "A", stop: "★", end: "B" };
-  const ICONS = { depart: "↑", straight: "↑", left: "←", right: "→", slight_left: "↖", slight_right: "↗",
-                  sharp_left: "↙", sharp_right: "↘", uturn: "↶", roundabout: "⟳", fork_left: "↖",
-                  fork_right: "↗", stop: "★", arrive: "⚑" };
   // Réglages du guidage
   const LEVELS = [1000, 300, 60];        // distances (m) des annonces vocales
   const OFF_ROUTE_M = 45;                // écart (m) au-delà duquel on est hors itinéraire
@@ -205,9 +434,35 @@
   const ARRIVE_M = 35;                   // distance (m) pour considérer qu'on est arrivé
   const SIM_TIMES = [1, 2, 4, 8];        // simulation : accélération du temps (la vitesse affichée reste réaliste)
   const SIM_ACCEL = 2.5;                 // variation de vitesse par seconde en simulation (m/s²)
-  const GUIDE_H = 102, BAR_H = 66;       // hauteur du bandeau du haut et de la barre du bas (px)
+  const GUIDE_H = 102, BAR_H = 68;       // hauteur du bandeau du haut et de la barre du bas (px)
   const ANCHOR_FRAC = 0.7;               // position de la flèche dans la zone libre de la carte (0 = haut, 1 = bas)
   const LOOKAHEAD_M = 30;                // distance devant soi pour calculer la direction de la route
+
+  // ----- Icônes -----
+  const svg = (body, sw) => '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="'
+    + (sw || 2) + '" stroke-linecap="round" stroke-linejoin="round">' + body + "</svg>";
+  const UI = {
+    sound: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>'),
+    mute: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>'),
+    play: svg('<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z" fill="currentColor" stroke="none"/>'),
+    stop: svg('<rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor" stroke="none"/>'),
+    fast: svg('<path d="M3 6l8 6-8 6zM12 6l8 6-8 6z" fill="currentColor"/>'),
+  };
+  // Flèches de manœuvre (rotation d'une flèche droite, flèche coudée pour gauche et droite)
+  const TURN = '<path d="M7 20v-6a4 4 0 0 1 4-4h8"/><path d="M15 6l4 4-4 4"/>';
+  const ROT = { depart: 0, straight: 0, slight_right: 45, sharp_right: 135, slight_left: -45,
+                sharp_left: -135, fork_left: -30, fork_right: 30 };
+  function maneuver(icon) {
+    let body;
+    if (icon === "right") body = TURN;
+    else if (icon === "left") body = '<g transform="translate(24 0) scale(-1 1)">' + TURN + "</g>";
+    else if (icon === "uturn") body = '<path d="M9 21V10a4.5 4.5 0 0 1 9 0v6"/><path d="M14.5 12.5L18 16l3.5-3.5"/>';
+    else if (icon === "roundabout") body = '<path d="M12 21v-5"/><path d="M9 13.5a5 5 0 1 1 6 0"/><path d="M16.5 9.5L15 13.5l-4-1"/>';
+    else if (icon === "stop") body = '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" fill="currentColor"/>';
+    else if (icon === "arrive") body = '<path d="M6 21V4"/><path d="M6 4h11l-2.5 4L17 12H6" fill="currentColor"/>';
+    else body = '<g transform="rotate(' + (ROT[icon] || 0) + ' 12 12)"><path d="M12 20V5"/><path d="M6 11l6-6 6 6"/></g>';
+    return svg(body, 2.6);
+  }
 
   const player = $("#player"), mic = $("#mic"), logEl = $("#log");
   let state = "idle", unlocked = false, audioCtx = null, chain = Promise.resolve();
@@ -215,6 +470,8 @@
   let sim = null, simIdx = 2, simD = 0, simV = 0, wakeLock = null, lastRoute = null, toastTimer = null;
   let rotated = false, mapBearing = 0;
   const nav = { active: false, muted: false, zoom: 16, zoomAdj: 0, heading: 0, lastReroute: 0 };
+
+  $("#gmute").innerHTML = UI.sound;
 
   function setState(s) { state = s; document.body.dataset.state = s; $("#status").textContent = LABELS[s]; }
   function say(role, text) {
@@ -235,22 +492,107 @@
     toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
   }
 
+  // Hauteur du panneau du bas : sert à placer l'attribution et à cadrer l'itinéraire au-dessus
+  const sheet = $("#sheet");
+  function syncSheet() { document.documentElement.style.setProperty("--sheet-h", sheet.offsetHeight + "px"); }
+  if (window.ResizeObserver) new ResizeObserver(syncSheet).observe(sheet);
+  syncSheet();
+
   // ----- Carte -----
   const hasMap = typeof L !== "undefined";
   let map = null, routeGroup = null, routeBounds = null, meMarker = null, meCircle = null;
   let follow = false, centered = false;
   const clampZoom = (z) => Math.max(14, Math.min(19, z));
+  // Restaurants affichés en points jaunes (base locale, zone visible uniquement)
+  const POI_MIN_ZOOM = 13, POI_COLOR = "#ffd23f";
+  const POI_FACE_ZOOM = 16;                                  // à partir de ce zoom, les points deviennent des smileys
+  const POI_RADIUS = { 13: 2.5, 14: 3, 15: 4, 16: 8, 17: 10, 18: 12, 19: 13 };
+  const POI_LABELS = { restaurant: "Restaurant", fast_food: "Fast-food" };
+  let poiOn = true, poiLayer = null, poiRenderer = null, poiTimer = null, poiCtl = null, poiLoaded = null;
 
   if (hasMap) {
     map = L.map("map", { zoomControl: false, attributionControl: false }).setView([48.8566, 2.3522], 11);
+    // Tuiles OpenStreetMap (assombries par le CSS .leaflet-tile-pane)
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
     map.on("dragstart", () => setFollow(false));
+    // Calque des restaurants, sous le tracé de l'itinéraire ; tolérance large pour toucher les points au doigt
+    map.createPane("pois").style.zIndex = 350;
+    // Dessin sur canvas : un point jaune, puis un visage souriant par-dessus quand on est assez zoomé
+    const SmileyCanvas = L.Canvas.extend({
+      _updateCircle: function (layer) {
+        L.Canvas.prototype._updateCircle.call(this, layer);
+        if (!layer.options.face || !this._drawing || layer._empty()) return;
+        const ctx = this._ctx, p = layer._point, r = layer._radius;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        if (rotated) ctx.rotate(rad(mapBearing));             // carte tournée : le visage reste à l'endroit
+        ctx.fillStyle = ctx.strokeStyle = "#3a2a00";
+        ctx.beginPath(); ctx.arc(-r * 0.34, -r * 0.2, r * 0.13, 0, 2 * Math.PI); ctx.fill();   // yeux
+        ctx.beginPath(); ctx.arc(r * 0.34, -r * 0.2, r * 0.13, 0, 2 * Math.PI); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, 0, r * 0.52, 0.18 * Math.PI, 0.82 * Math.PI);             // sourire
+        ctx.lineWidth = Math.max(1.3, r * 0.14); ctx.lineCap = "round"; ctx.stroke();
+        ctx.restore();
+      },
+    });
+    poiRenderer = new SmileyCanvas({ pane: "pois", padding: 0.3, tolerance: 8 });
+    poiLayer = L.layerGroup().addTo(map);
+    map.on("moveend", schedulePois);
     setTimeout(refreshMap, 200);
     window.addEventListener("resize", refreshMap);
     window.addEventListener("orientationchange", () => setTimeout(refreshMap, 300));
   } else {
+    $("#map").classList.add("nomap");
     $("#map").textContent = "Carte indisponible (connexion).";
     $("#attr").hidden = true;
+  }
+
+  // ----- Restaurants sur la carte -----
+  function schedulePois() { clearTimeout(poiTimer); poiTimer = setTimeout(loadPois, 350); }
+  function clearPois() { if (poiLayer) poiLayer.clearLayers(); poiLoaded = null; }
+  function poiPopup(p) {
+    const d = document.createElement("div");
+    d.className = "poi-pop";
+    const b = document.createElement("b"); b.textContent = p.name; d.append(b);   // texte brut (données OSM)
+    const t = document.createElement("span"); t.className = "tag"; t.textContent = POI_LABELS[p.cat] || "Lieu"; d.append(t);
+    if (p.adresse) { const a = document.createElement("div"); a.textContent = p.adresse; d.append(a); }
+    if (p.horaires) { const h = document.createElement("div"); h.className = "muted"; h.textContent = p.horaires; d.append(h); }
+    return d;
+  }
+  async function loadPois() {
+    if (!hasMap) return;
+    if (!poiOn || map.getZoom() < POI_MIN_ZOOM) { clearPois(); return; }
+    const view = map.getBounds();
+    // Déjà chargé pour ce niveau de zoom (évite une requête à chaque mouvement)
+    if (poiLoaded && poiLoaded.zoom === map.getZoom() && poiLoaded.box.contains(view)) return;
+    const b = view.pad(0.25);                                // on charge un peu plus large que l'écran
+    const q = new URLSearchParams({ s: b.getSouth().toFixed(5), w: b.getWest().toFixed(5),
+                                    n: b.getNorth().toFixed(5), e: b.getEast().toFixed(5),
+                                    limit: { 13: 500, 14: 1000 }[map.getZoom()] || 1500 });   // moins de points quand on est loin
+    if (poiCtl) poiCtl.abort();
+    poiCtl = new AbortController();
+    try {
+      const res = await fetch("/api/pois?" + q, { credentials: "same-origin", signal: poiCtl.signal });
+      if (res.status === 401) { location.reload(); return; }
+      if (!res.ok) return;
+      const data = await res.json();
+      poiLayer.clearLayers();
+      if (!poiOn) return;
+      const z = map.getZoom(), radius = POI_RADIUS[z] || 13, face = z >= POI_FACE_ZOOM;   // petits de loin, smileys de près
+      // La fiche s'ouvre toujours dans la partie visible de la carte (entre l'en-tête et le panneau du bas)
+      const H = $("#mapwrap").clientHeight;
+      const padTop = (nav.active ? bottomOf("#guide", 112) : bottomOf("#info", bottomOf("header", 70))) + 12;
+      const padBottom = H - (nav.active ? topOf("#gbar", H - 80) : topOf("#sheet", H - 160)) + 12;
+      const popOpts = { maxWidth: 240, autoPanPaddingTopLeft: L.point(16, padTop),
+                        autoPanPaddingBottomRight: L.point(70, padBottom) };
+      for (const p of data.items || []) {
+        L.circleMarker([p.lat, p.lon], { renderer: poiRenderer, radius: radius, face: face,
+                                         color: "#16181c", weight: z <= 13 ? 1 : face ? 2 : 1.5,
+                                         fillColor: POI_COLOR, fillOpacity: 1 })
+          .bindPopup(() => poiPopup(p), popOpts)
+          .addTo(poiLayer);
+      }
+      poiLoaded = data.too_wide ? null : { box: b, zoom: map.getZoom() };
+    } catch (e) {}
   }
 
   function refreshMap() {
@@ -259,12 +601,24 @@
     map.invalidateSize();
   }
 
+  // Bas d'un élément visible, mesuré depuis le haut de la carte (sinon valeur par défaut)
+  function bottomOf(sel, fallback) {
+    const el = $(sel);
+    if (!el || el.hidden || !el.offsetParent) return fallback;
+    return el.getBoundingClientRect().bottom - $("#mapwrap").getBoundingClientRect().top;
+  }
+  function topOf(sel, fallback) {
+    const el = $(sel);
+    if (!el || el.hidden || !el.offsetParent) return fallback;
+    return el.getBoundingClientRect().top - $("#mapwrap").getBoundingClientRect().top;
+  }
+
   // ----- Mode GPS : la carte tourne, la flèche reste fixe -----
   // La carte est agrandie (carré centré sur la flèche) pour que, une fois tournée,
   // elle recouvre toujours tout l'écran.
   function anchorY() {
     const H = $("#mapwrap").clientHeight;
-    const top = GUIDE_H + 12, bottom = H - BAR_H;
+    const top = bottomOf("#guide", GUIDE_H) + 12, bottom = topOf("#gbar", H - BAR_H);
     return top + Math.max(0, bottom - top) * ANCHOR_FRAC;
   }
   function layoutRotated() {
@@ -337,12 +691,12 @@
 
   function pinIcon(role) {
     return L.divIcon({ className: "", html: '<div class="pin ' + role + '">' + PIN[role] + "</div>",
-                       iconSize: [30, 30], iconAnchor: [15, 15] });
+                       iconSize: [32, 32], iconAnchor: [16, 16] });
   }
   function meIcon(heading) {
     const arrow = typeof heading === "number" && !isNaN(heading);
     const inner = arrow ? ' style="transform:rotate(' + Math.round(heading) + 'deg)">▲' : ">";
-    return L.divIcon({ className: "", html: '<div class="me"' + inner + "</div>", iconSize: [26, 26], iconAnchor: [13, 13] });
+    return L.divIcon({ className: "", html: '<div class="me"' + inner + "</div>", iconSize: [24, 24], iconAnchor: [12, 12] });
   }
   function clearMap() {
     if (routeGroup) { routeGroup.remove(); routeGroup = null; }
@@ -350,16 +704,20 @@
     $("#info").hidden = true;
   }
   function fitRoute() {
-    if (hasMap && routeBounds) {
-      map.fitBounds(routeBounds, { paddingTopLeft: [40, nav.active ? 130 : 70], paddingBottomRight: [40, 100] });
-    }
+    if (!hasMap || !routeBounds) return;
+    const H = $("#mapwrap").clientHeight;
+    const top = (nav.active ? bottomOf("#guide", 112) : bottomOf("#info", bottomOf("header", 70))) + 24;
+    const bottom = H - (nav.active ? topOf("#gbar", H - 80) : topOf("#sheet", H - 160)) + 24;
+    map.fitBounds(routeBounds, { paddingTopLeft: [40, top], paddingBottomRight: [70, bottom] });
   }
   function showMap(m, opts) {
     if (!hasMap || !m || !m.line || !m.line.length) return;
     clearMap();
     routeGroup = L.layerGroup().addTo(map);
-    L.polyline(m.line, { color: "#ffffff", weight: 10, opacity: 0.95, lineCap: "round" }).addTo(routeGroup);
-    const line = L.polyline(m.line, { color: "#2563eb", weight: 6, lineCap: "round" }).addTo(routeGroup);
+    // Halo, contour sombre puis trait lumineux
+    L.polyline(m.line, { color: "#4cc9f0", weight: 18, opacity: 0.18, lineCap: "round", lineJoin: "round" }).addTo(routeGroup);
+    L.polyline(m.line, { color: "#0e1013", weight: 10, opacity: 0.9, lineCap: "round", lineJoin: "round" }).addTo(routeGroup);
+    const line = L.polyline(m.line, { color: "#4cc9f0", weight: 6, lineCap: "round", lineJoin: "round" }).addTo(routeGroup);
     for (const p of m.points || []) {
       const mk = L.marker([p.lat, p.lon], { icon: pinIcon(p.role) }).addTo(routeGroup);
       const tip = document.createElement("div");
@@ -367,16 +725,16 @@
       mk.bindTooltip(tip);
     }
     routeBounds = line.getBounds();
-    if (!opts || opts.fit !== false) { setFollow(false); fitRoute(); }
     const stop = (m.points || []).find((p) => p.role === "stop");
     $("#info").textContent = m.duration_min + " min · " + m.distance_km + " km" + (stop ? " · via " + stop.name : "");
     $("#info").hidden = nav.active;
+    if (!opts || opts.fit !== false) { setFollow(false); fitRoute(); }
   }
   function updateMe() {
     if (!hasMap || !gps) return;
     const ll = [gps.lat, gps.lon];
     if (!meMarker) {
-      meCircle = L.circle(ll, { radius: gps.acc || 30, color: "#3b82f6", weight: 1, fillOpacity: 0.12 }).addTo(map);
+      meCircle = L.circle(ll, { radius: gps.acc || 30, color: "#4cc9f0", weight: 1, fillColor: "#4cc9f0", fillOpacity: 0.1 }).addTo(map);
       meMarker = L.marker(ll, { icon: meIcon(gps.heading), interactive: false, zIndexOffset: 1000 }).addTo(map);
     } else {
       meMarker.setLatLng(ll);
@@ -385,7 +743,7 @@
     }
     // En mode GPS, la flèche fixe de l'écran remplace le point bleu de la carte
     meMarker.setOpacity(rotated ? 0 : 1);
-    meCircle.setStyle({ opacity: rotated ? 0 : 1, fillOpacity: rotated ? 0 : 0.12 });
+    meCircle.setStyle({ opacity: rotated ? 0 : 1, fillOpacity: rotated ? 0 : 0.1 });
     if (follow) {
       if (rotated) map.panTo(ll, { animate: true, duration: 0.9, easeLinearity: 1, noMoveStart: true });
       else map.setView(ll, nav.active ? nav.zoom : Math.max(map.getZoom(), 16));
@@ -401,7 +759,7 @@
   // ----- Position GPS -----
   function onGps(p) {                         // p = { lat, lon, acc, heading, speed (m/s) }
     gps = p;
-    $("#gps").textContent = sim ? "GPS (simulé)" : "GPS ✓";
+    $("#gps").textContent = sim ? "GPS simulé" : "GPS actif";
     $("#gps").className = "ok";
     const v = typeof p.speed === "number" && isFinite(p.speed) && p.speed >= 0 ? Math.round(p.speed * 3.6) : null;
     $("#spdv").textContent = v === null ? "–" : v;
@@ -415,7 +773,7 @@
         onGps({ lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy,
                 heading: pos.coords.heading, speed: pos.coords.speed });
       },
-      () => { if (sim) return; gps = null; $("#gps").textContent = "GPS ✗"; $("#gps").className = ""; },
+      () => { if (sim) return; gps = null; $("#gps").textContent = "GPS indisponible"; $("#gps").className = ""; },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
   }
 
@@ -553,7 +911,7 @@
   }
   function finishGuidance() {
     speak("Vous êtes arrivé à destination.");
-    $("#gicon").textContent = ICONS.arrive;
+    $("#gicon").innerHTML = maneuver("arrive");
     $("#gdist").textContent = "Arrivé";
     $("#ginstr").textContent = "Vous êtes arrivé à destination";
     $("#groad").textContent = "";
@@ -622,12 +980,14 @@
     }
     renderGuide();
   }
+  let lastIcon = null;
   function renderGuide() {
     if (!nav.active) return;
     const steps = nav.steps, s = steps[Math.min(nav.stepIdx, steps.length - 1)];
     const dist = nav.dist != null ? nav.dist : s.along;
     const nx = steps[nav.stepIdx + 1];
-    $("#gicon").textContent = ICONS[s.icon] || "↑";
+    const icon = s.kind === "arrive" ? "arrive" : s.kind === "stop" ? "stop" : (s.icon || "straight");
+    if (icon !== lastIcon) { $("#gicon").innerHTML = maneuver(icon); lastIcon = icon; }
     $("#gdist").textContent = fmtDist(Math.max(0, dist));
     $("#ginstr").textContent = s.text;
     $("#groad").textContent = !gps ? "En attente du GPS…" : (nx ? "Ensuite : " + nx.text : "");
@@ -635,7 +995,9 @@
     const min = Math.max(1, Math.round((nav.duration / 60) * (remain / nav.total)));
     const eta = new Date(Date.now() + min * 60000);
     const hh = String(eta.getHours()).padStart(2, "0"), mm = String(eta.getMinutes()).padStart(2, "0");
-    $("#geta").textContent = hh + ":" + mm + " · " + min + " min · " + fmtDist(remain);
+    $("#geta").innerHTML =
+      '<div class="eta"><b class="hl">' + hh + ":" + mm + "</b><small>Arrivée</small></div>"
+      + '<div class="eta"><b>' + min + " min · " + fmtDist(remain) + "</b><small>Restant</small></div>";
   }
   async function reroute() {
     if (nav.rerouting || !nav.dest || !gps) return;
@@ -676,8 +1038,8 @@
     return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, heading];
   }
   function updateSimUi() {
-    $("#gsim").textContent = sim ? "■ Arrêter la simulation" : "▶ Simuler";
-    $("#gspeed").textContent = "⏩ ×" + SIM_TIMES[simIdx];
+    $("#gsim").innerHTML = sim ? UI.stop + "Arrêter la simulation" : UI.play + "Simuler";
+    $("#gspeed").innerHTML = UI.fast + "×" + SIM_TIMES[simIdx];
   }
   function stopSim() {
     if (sim) { clearInterval(sim); sim = null; }
@@ -820,6 +1182,7 @@
         let s = 0;
         for (const v of buf) { const x = (v - 128) / 128; s += x * x; }
         const rms = Math.sqrt(s / buf.length);
+        mic.style.setProperty("--lvl", Math.min(1, rms * 7).toFixed(2));   // le halo du micro suit la voix
         const now = performance.now();
         if (now - t0 < 300) { noiseSum += rms; noiseN++; return; }   // bruit ambiant
         const noise = noiseN ? noiseSum / noiseN : 0.01;
@@ -833,6 +1196,7 @@
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
     mr.onstop = () => {
       if (timer) clearInterval(timer);
+      mic.style.setProperty("--lvl", 0);
       if (source) source.disconnect();
       stream.getTracks().forEach((t) => t.stop());
       rec = null;
@@ -924,7 +1288,7 @@
           unlockAudio(); startGps();
           if (state === "processing" || state === "recording") return;
           if (state === "speaking") interrupt();
-          $("#options").hidden = true;
+          setOptions(false);
           const fd = new FormData();
           fd.append("text", "Emmène-moi à " + it.destination);
           addPosition(fd);
@@ -942,6 +1306,13 @@
   });
 
   // ----- Interactions -----
+  function setOptions(open) {
+    $("#options").hidden = !open;
+    $("#optbtn").classList.toggle("on", open);
+    sheet.classList.toggle("opts", open);
+    if (open) loadHistory();
+    setTimeout(refreshMap, 50);
+  }
   function zoomBy(dz) {
     if (!hasMap) return;
     if (rotated) { nav.zoomAdj = Math.max(-3, Math.min(3, nav.zoomAdj + dz)); followView(); }
@@ -954,27 +1325,32 @@
     if (state === "speaking") interrupt();
     startRecording();
   });
-  $("#optbtn").addEventListener("click", () => {
-    $("#options").hidden = !$("#options").hidden;
-    if (!$("#options").hidden) loadHistory();
-    setTimeout(refreshMap, 50);
-  });
+  $("#optbtn").addEventListener("click", () => setOptions($("#options").hidden));
   $("#fit").addEventListener("click", () => { setFollow(false); fitRoute(); });
   $("#follow").addEventListener("click", () => {
     if (!gps && !nav.active) { say("sys", "Position GPS indisponible pour l'instant."); return; }
     setFollow(!follow);
   });
+  $("#poibtn").addEventListener("click", () => {
+    poiOn = !poiOn;
+    $("#poibtn").classList.toggle("on", poiOn);
+    clearPois();
+    if (poiOn) {
+      if (hasMap && map.getZoom() < POI_MIN_ZOOM) say("sys", "Zoome un peu pour voir les restaurants.");
+      loadPois();
+    }
+  });
   $("#zin").addEventListener("click", () => zoomBy(1));
   $("#zout").addEventListener("click", () => zoomBy(-1));
   $("#gmute").addEventListener("click", () => {
     nav.muted = !nav.muted;
-    $("#gmute").textContent = nav.muted ? "🔇" : "🔊";
+    $("#gmute").innerHTML = nav.muted ? UI.mute : UI.sound;
     if (nav.muted) { try { speechSynthesis.cancel(); } catch (e) {} }
   });
   $("#gstop").addEventListener("click", () => { stopSim(); stopGuidance(false); });
   $("#gsim").addEventListener("click", toggleSim);
   $("#gspeed").addEventListener("click", () => { simIdx = (simIdx + 1) % SIM_TIMES.length; updateSimUi(); });
-  $("#simbtn").addEventListener("click", () => { $("#options").hidden = true; setTimeout(refreshMap, 50); simulate(); });
+  $("#simbtn").addEventListener("click", () => { setOptions(false); simulate(); });
   $("#tf").addEventListener("submit", (e) => {
     e.preventDefault();
     unlockAudio(); startGps();
@@ -996,6 +1372,7 @@
     say("sys", "Nouvelle conversation. Appuie sur le bouton et dis où tu vas.");
   });
 
+  updateSimUi();
   setState("idle");
   startGps();
   say("sys", "Appuie sur le bouton et dis-moi où tu vas.");

@@ -68,3 +68,22 @@ def places_local(line, category, radius=1500, name_like=None):
             "horaires": horaires or "",
         })
     return places
+
+def places_in_box(south, west, north, east, categories, limit=1500):
+    """Lieux d'une zone rectangulaire (carte affichée), pour les points sur la carte.
+    S'il y en a trop, l'ordre « mélangé » mais fixe répartit les points gardés sur toute la zone."""
+    if not available() or not categories:
+        return []
+    marks = ",".join("?" * len(categories))
+    con = sqlite3.connect(DB_PATH)
+    try:
+        rows = con.execute(
+            f"SELECT category, name, lat, lon, street, housenumber, city, horaires FROM poi "
+            f"WHERE category IN ({marks}) AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? "
+            f"ORDER BY (rowid * 7919) % 10007 LIMIT ?",
+            [*categories, south, north, west, east, limit]).fetchall()
+    finally:
+        con.close()
+    return [{"cat": c, "name": n, "lat": round(la, 6), "lon": round(lo, 6),
+             "adresse": _address(st, num, city), "horaires": h or ""}
+            for c, n, la, lo, st, num, city, h in rows]

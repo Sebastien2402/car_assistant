@@ -3,33 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0f14">
+<meta name="theme-color" content="#16181c">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700&display=swap">
 <title>Copilote</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
+  :root { color-scheme: dark; --bg: #16181c; --txt: #eef1f5; --muted: #8d949e; --line: rgba(255, 255, 255, .08);
+          --grad: linear-gradient(135deg, #4cc9f0 0%, #7b61ff 100%); --rec: #ff4d6d; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; }
-  body { background: #0b0f14; color: #e8eef5; display: flex; align-items: center; justify-content: center;
-         font: 17px/1.4 -apple-system, system-ui, sans-serif; padding: 24px; }
-  form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
-  h1 { margin: 0; font-size: 26px; }
-  p { margin: 0; color: #8a97a8; }
-  input[type=password], input[type=text] { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #2a3544;
-         background: #141b24; color: #e8eef5; font-size: 18px; text-align: center; }
-  button { padding: 14px; border-radius: 12px; border: none; background: #3b82f6; color: #fff;
-           font-size: 18px; font-weight: 600; }
+  body { background: var(--bg); color: var(--txt); display: flex; align-items: center; justify-content: center;
+         font: 16px/1.45 "Inter", -apple-system, system-ui, sans-serif; padding: 24px 16px; overflow: hidden;
+         -webkit-font-smoothing: antialiased; }
+  /* Halos lumineux en fond */
+  body::before, body::after { content: ""; position: fixed; width: 420px; height: 420px; border-radius: 50%;
+                              filter: blur(90px); opacity: .32; pointer-events: none; }
+  body::before { background: #4cc9f0; top: -160px; left: -140px; }
+  body::after { background: #7b61ff; bottom: -180px; right: -140px; }
+  .grid { position: fixed; inset: 0; pointer-events: none; opacity: .5;
+          background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+                            linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+          background-size: 36px 36px;
+          -webkit-mask-image: radial-gradient(circle at 50% 45%, #000, transparent 70%);
+          mask-image: radial-gradient(circle at 50% 45%, #000, transparent 70%); }
+
+  form { position: relative; z-index: 1; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 16px;
+         padding: 30px 24px 24px; border-radius: 30px; text-align: center;
+         background: rgba(30, 33, 39, .72); border: 1px solid var(--line);
+         box-shadow: 0 24px 60px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .06);
+         -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%);
+         animation: rise .4s ease-out; }
+  .logo { width: 64px; height: 64px; margin: 0 auto 2px; border-radius: 20px; background: var(--grad); color: #fff;
+          display: grid; place-items: center;
+          box-shadow: 0 12px 32px rgba(76, 201, 240, .4), inset 0 1px 0 rgba(255, 255, 255, .35); }
+  .logo svg { width: 32px; height: 32px; }
+  h1 { margin: 0; font: 700 26px/1.1 "Sora", "Inter", sans-serif; letter-spacing: -.3px; }
+  p { margin: -6px 0 4px; color: var(--muted); font-size: 14.5px; }
+  input[type=password], input[type=text] { width: 100%; height: 56px; padding: 0 16px; border-radius: 18px;
+         border: 1px solid var(--line); background: rgba(0, 0, 0, .28); color: var(--txt);
+         font: 600 20px "Inter", sans-serif; text-align: center; letter-spacing: 4px; transition: border-color .2s, box-shadow .2s; }
+  input::placeholder { letter-spacing: 0; font-weight: 400; font-size: 16px; color: var(--muted); }
+  input[type=password]:focus, input[type=text]:focus { outline: none; border-color: rgba(76, 201, 240, .6);
+         box-shadow: 0 0 0 4px rgba(76, 201, 240, .15); }
+  .show { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 14px; cursor: pointer; }
+  .show input { appearance: none; -webkit-appearance: none; margin: 0; position: relative; width: 40px; height: 24px;
+                border-radius: 999px; background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .14);
+                transition: background .25s; cursor: pointer; }
+  .show input::before { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+                        background: #fff; transition: transform .25s; }
+  .show input:checked { background: var(--grad); border-color: transparent; }
+  .show input:checked::before { transform: translateX(16px); }
+  button { height: 56px; border-radius: 18px; border: none; background: var(--grad); color: #fff; cursor: pointer;
+           font: 700 17px "Inter", sans-serif; letter-spacing: .2px;
+           box-shadow: 0 12px 30px rgba(76, 201, 240, .3), inset 0 1px 0 rgba(255, 255, 255, .3);
+           transition: transform .15s, opacity .2s; }
+  button:active { transform: scale(.98); }
   button:disabled { opacity: .6; }
-  label { color: #8a97a8; font-size: 14px; }
-  #msg { min-height: 1.4em; color: #ef4444; font-size: 15px; }
+  #msg { min-height: 1.4em; color: var(--rec); font-size: 14.5px; font-weight: 500; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
+<div class="grid"></div>
 <form id="f">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 L20 21 L12 16.5 L4 21 Z"/></svg></div>
   <h1>Copilote</h1>
   <p>Entre le code d'accès pour continuer.</p>
   <input id="code" type="password" name="password" placeholder="Code d'accès" autocomplete="current-password"
          autocapitalize="none" autocorrect="off" spellcheck="false" autofocus>
-  <label><input type="checkbox" id="show"> Afficher le code</label>
+  <label class="show"><input type="checkbox" id="show"> Afficher le code</label>
   <button id="btn" type="submit">Entrer</button>
   <div id="msg"></div>
 </form>
