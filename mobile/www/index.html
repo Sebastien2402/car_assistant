@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16181c">
+<title>Copilote</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grid"></div>
+<main class="card">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 L20 21 L12 16.5 L4 21 Z"/></svg></div>
+  <h1>Copilote</h1>
+
+  <!-- Connexion automatique au serveur déjà enregistré -->
+  <section id="connecting" hidden>
+    <div class="spinner"></div>
+    <p id="ctext">Connexion…</p>
+    <button id="cancel" class="ghost" type="button">Changer d'adresse</button>
+  </section>
+
+  <!-- Saisie de l'adresse du serveur -->
+  <form id="f" hidden novalidate>
+    <p>Adresse du serveur qui tourne sur ton PC.</p>
+    <input id="url" type="url" inputmode="url" placeholder="https://ton-pc.tailxxxx.ts.net"
+           autocapitalize="none" autocorrect="off" spellcheck="false">
+    <button type="submit">Se connecter</button>
+    <div id="msg" role="alert"></div>
+    <p class="hint">Avec Tailscale, l'adresse ne change jamais : tu ne la saisis qu'une fois.
+      Une adresse <b>trycloudflare.com</b> marche aussi, mais elle change à chaque lancement du tunnel.</p>
+  </form>
+</main>
+<script>
+  const KEY = "copilote_server";
+  const $ = (s) => document.querySelector(s);
+  const store = {
+    get() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } },
+    set(v) { try { localStorage.setItem(KEY, v); } catch (e) {} },
+  };
+
+  // « ton-pc.tail1234.ts.net/ » -> « https://ton-pc.tail1234.ts.net »
+  function normaliser(v) {
+    v = (v || "").trim().replace(/\/+$/, "");
+    if (!v) return "";
+    if (!/^https?:\/\//i.test(v)) v = "https://" + v;
+    return v;
+  }
+
+  // Le serveur répond-il ? (no-cors : on vérifie seulement qu'il est joignable)
+  async function joignable(url) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    try {
+      await fetch(url + "/static/manifest.json", { mode: "no-cors", cache: "no-store", signal: ctl.signal });
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  function showForm(err) {
+    $("#connecting").hidden = true;
+    $("#f").hidden = false;
+    $("#url").value = store.get();
+    $("#msg").textContent = err || "";
+  }
+
+  let annule = false;
+  async function connecter(url) {
+    annule = false;
+    $("#f").hidden = true;
+    $("#connecting").hidden = false;
+    $("#ctext").textContent = "Connexion à " + url.replace(/^https:\/\//, "") + "…";
+    const ok = await joignable(url);
+    if (annule) return;
+    if (!ok) {
+      showForm("Serveur injoignable. Vérifie que le PC est allumé, que uvicorn tourne, "
+               + "et que Tailscale est activé sur ce téléphone.");
+      return;
+    }
+    location.href = url + "/";
+  }
+
+  $("#cancel").addEventListener("click", () => { annule = true; showForm(); });
+  $("#f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const url = normaliser($("#url").value);
+    if (!url) { $("#msg").textContent = "Entre l'adresse du serveur."; return; }
+    if (url.startsWith("http://")) {
+      $("#msg").textContent = "L'adresse doit commencer par https:// (obligatoire pour le micro et le GPS).";
+      return;
+    }
+    if (!/\.ts\.net$|\.trycloudflare\.com$/i.test(new URL(url).hostname)) {
+      $("#msg").textContent = "Adresse non autorisée par l'appli : utilise une adresse en .ts.net (Tailscale) "
+                              + "ou .trycloudflare.com.";
+      return;
+    }
+    store.set(url);
+    connecter(url);
+  });
+
+  // ?change=1 : on vient du bouton « Changer de serveur » de l'appli
+  const saved = store.get();
+  if (saved && !new URLSearchParams(location.search).has("change")) connecter(saved);
+  else showForm();
+</script>
+</body>
+</html>

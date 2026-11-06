@@ -1,0 +1,17 @@
+{
+  "name": "copilote-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Appli mobile (Android et iPhone) du Copilote : emballe l'interface web servie par ton PC",
+  "scripts": {
+    "sync": "cap sync"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

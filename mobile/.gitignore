@@ -1,0 +1,4 @@
+node_modules/
+# Fichiers générés par « npx cap sync » (copies de www/)
+android/app/src/main/assets/public/
+ios/App/App/public/

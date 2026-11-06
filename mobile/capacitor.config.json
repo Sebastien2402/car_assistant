@@ -1,0 +1,19 @@
+{
+  "appId": "fr.seb.copilote",
+  "appName": "Copilote",
+  "webDir": "www",
+  "backgroundColor": "#16181c",
+  "appendUserAgent": "CopiloteApp",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": ["*.*.ts.net", "*.trycloudflare.com"],
+    "errorPath": "erreur.html"
+  },
+  "android": {
+    "backgroundColor": "#16181c"
+  },
+  "ios": {
+    "backgroundColor": "#16181c",
+    "contentInset": "never"
+  }
+}

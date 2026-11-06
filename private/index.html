@@ -396,6 +396,9 @@
           <button id="simbtn" class="act" type="button">
             <svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>Simuler le trajet
           </button>
+          <a id="changesrv" href="#" class="act wide" hidden>
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16v4"/></svg>Changer de serveur
+          </a>
           <a href="/logout" class="act wide danger">
             <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>Verrouiller l'application
           </a>
@@ -777,12 +780,39 @@
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
   }
 
-  // ----- Voix du guidage (synthèse vocale de l'appareil) -----
+  // ----- Voix du guidage -----
+  // Synthèse vocale de l'appareil si elle existe ; sinon (appli Android) la voix Piper du serveur
+  const DEVICE_TTS = "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+  const guideAudio = new Audio();
+  guideAudio.setAttribute("playsinline", "");
+  let ttsCtl = null, ttsUrl = null;
   function frVoice() {
     try { return speechSynthesis.getVoices().find((v) => /^fr/i.test(v.lang)); } catch (e) { return null; }
   }
+  function stopSpeak() {
+    try { speechSynthesis.cancel(); } catch (e) {}
+    if (ttsCtl) { ttsCtl.abort(); ttsCtl = null; }
+    guideAudio.pause();
+  }
+  async function speakServer(text) {
+    stopSpeak();
+    const ctl = ttsCtl = new AbortController();
+    try {
+      const fd = new FormData();
+      fd.append("text", text);
+      const res = await fetch("/api/tts", { method: "POST", body: fd, credentials: "same-origin", signal: ctl.signal });
+      if (!res.ok || ctl !== ttsCtl) return;
+      const blob = await res.blob();
+      if (ctl !== ttsCtl) return;                 // une annonce plus récente est partie entre-temps
+      if (ttsUrl) URL.revokeObjectURL(ttsUrl);
+      ttsUrl = URL.createObjectURL(blob);
+      guideAudio.src = ttsUrl;
+      guideAudio.play().catch(() => {});
+    } catch (e) {}
+  }
   function speak(text) {
-    if (nav.muted || !("speechSynthesis" in window)) return;
+    if (nav.muted) return;
+    if (!DEVICE_TTS) { speakServer(text); return; }
     try {
       speechSynthesis.cancel();                // coupe l'annonce précédente
       const u = new SpeechSynthesisUtterance(text);
@@ -905,7 +935,7 @@
   function stopGuidance(quiet) {
     const was = nav.active;
     teardown(); hideGuideUi();
-    try { speechSynthesis.cancel(); } catch (e) {}
+    stopSpeak();
     if (was && !quiet) say("sys", "Guidage arrêté.");
     if (routeBounds && !nav.active) $("#info").hidden = false;
   }
@@ -1345,7 +1375,7 @@
   $("#gmute").addEventListener("click", () => {
     nav.muted = !nav.muted;
     $("#gmute").innerHTML = nav.muted ? UI.mute : UI.sound;
-    if (nav.muted) { try { speechSynthesis.cancel(); } catch (e) {} }
+    if (nav.muted) stopSpeak();
   });
   $("#gstop").addEventListener("click", () => { stopSim(); stopGuidance(false); });
   $("#gsim").addEventListener("click", toggleSim);
@@ -1371,6 +1401,13 @@
     logEl.innerHTML = ""; clearMap();
     say("sys", "Nouvelle conversation. Appuie sur le bouton et dis où tu vas.");
   });
+
+  // Dans l'appli mobile (Capacitor) : retour à l'écran de choix du serveur
+  if (/CopiloteApp/.test(navigator.userAgent)) {
+    const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    $("#changesrv").href = (ios ? "capacitor://localhost" : "https://localhost") + "/index.html?change=1";
+    $("#changesrv").hidden = false;
+  }
 
   updateSimUi();
   setState("idle");

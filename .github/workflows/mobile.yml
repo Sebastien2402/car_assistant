@@ -1,0 +1,103 @@
+# Fabrique l'appli mobile du Copilote sur les machines de GitHub (gratuit pour un dépôt public).
+# - Android : à chaque push qui touche mobile/, ou à la demande  -> fichier Copilote-android.apk
+# - iPhone  : à la demande (onglet Actions > Appli mobile > Run workflow, case « iPhone » cochée)
+#             -> fichier Copilote-iphone.ipa non signé, à installer avec Sideloadly
+# Les fichiers se téléchargent en bas de la page du run, rubrique « Artifacts ».
+name: Appli mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile.yml"
+  workflow_dispatch:
+    inputs:
+      android:
+        description: "Fabriquer l'APK Android"
+        type: boolean
+        default: true
+      ios:
+        description: "Fabriquer l'appli iPhone (.ipa non signée)"
+        type: boolean
+        default: true
+
+jobs:
+  android:
+    if: github.event_name == 'push' || inputs.android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - name: Dépendances et copie de l'écran de démarrage
+        working-directory: mobile
+        run: |
+          npm ci
+          npx cap sync android
+
+      - name: Fabrication de l'APK
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/Copilote-android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Copilote-android
+          path: Copilote-android.apk
+          retention-days: 30
+
+  ios:
+    if: github.event_name == 'workflow_dispatch' && inputs.ios
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Version la plus récente de Xcode (Capacitor 8 demande Xcode 26)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Dépendances et copie de l'écran de démarrage
+        working-directory: mobile
+        run: |
+          npm ci
+          npx cap sync ios
+
+      - name: Fabrication de l'appli (sans signature)
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry "$GITHUB_WORKSPACE/Copilote-iphone.ipa" Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Copilote-iphone
+          path: Copilote-iphone.ipa
+          retention-days: 30

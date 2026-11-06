@@ -1,0 +1,59 @@
+/* Écrans locaux de l'appli (démarrage, erreur) : même style que l'interface du Copilote.
+   Pas de police externe : ces écrans doivent s'afficher même sans connexion. */
+:root { color-scheme: dark; --bg: #16181c; --txt: #eef1f5; --muted: #8d949e; --line: rgba(255, 255, 255, .08);
+        --grad: linear-gradient(135deg, #4cc9f0 0%, #7b61ff 100%); --rec: #ff4d6d; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--txt); display: flex; align-items: center; justify-content: center;
+       font: 16px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; overflow: hidden;
+       padding: calc(env(safe-area-inset-top) + 24px) 16px calc(env(safe-area-inset-bottom) + 24px);
+       -webkit-font-smoothing: antialiased; }
+body::before, body::after { content: ""; position: fixed; width: 420px; height: 420px; border-radius: 50%;
+                            filter: blur(90px); opacity: .32; pointer-events: none; }
+body::before { background: #4cc9f0; top: -160px; left: -140px; }
+body::after { background: #7b61ff; bottom: -180px; right: -140px; }
+.grid { position: fixed; inset: 0; pointer-events: none; opacity: .5;
+        background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+                          linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+        background-size: 36px 36px;
+        -webkit-mask-image: radial-gradient(circle at 50% 45%, #000, transparent 70%);
+        mask-image: radial-gradient(circle at 50% 45%, #000, transparent 70%); }
+
+.card { position: relative; z-index: 1; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 16px;
+        padding: 30px 24px 24px; border-radius: 30px; text-align: center;
+        background: rgba(30, 33, 39, .72); border: 1px solid var(--line);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, .5), inset 0 1px 0 rgba(255, 255, 255, .06);
+        -webkit-backdrop-filter: blur(24px) saturate(150%); backdrop-filter: blur(24px) saturate(150%);
+        animation: rise .4s ease-out; }
+.card section, .card form { display: flex; flex-direction: column; gap: 16px; }
+.logo { width: 64px; height: 64px; margin: 0 auto 2px; border-radius: 20px; background: var(--grad); color: #fff;
+        display: grid; place-items: center;
+        box-shadow: 0 12px 32px rgba(76, 201, 240, .4), inset 0 1px 0 rgba(255, 255, 255, .35); }
+.logo.off { background: #2a2e35; color: var(--muted); box-shadow: none; }
+.logo svg { width: 32px; height: 32px; }
+h1 { margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -.3px; }
+p { margin: 0; color: var(--muted); font-size: 14.5px; }
+.hint { font-size: 12.5px; }
+.hint b { color: var(--txt); font-weight: 600; }
+
+input { width: 100%; height: 54px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--line);
+        background: rgba(0, 0, 0, .28); color: var(--txt); font-size: 16px; text-align: center;
+        transition: border-color .2s, box-shadow .2s; }
+input::placeholder { color: var(--muted); }
+input:focus { outline: none; border-color: rgba(76, 201, 240, .6); box-shadow: 0 0 0 4px rgba(76, 201, 240, .15); }
+
+button, .btn { display: flex; align-items: center; justify-content: center; height: 54px; border-radius: 18px;
+               border: none; background: var(--grad); color: #fff; font: inherit; font-size: 17px; font-weight: 700;
+               text-decoration: none; cursor: pointer;
+               box-shadow: 0 12px 30px rgba(76, 201, 240, .3), inset 0 1px 0 rgba(255, 255, 255, .3); }
+button:active, .btn:active { transform: scale(.98); }
+.ghost { background: rgba(255, 255, 255, .06) !important; border: 1px solid var(--line); box-shadow: none !important;
+         font-size: 15px; font-weight: 600; color: var(--txt); }
+#msg { min-height: 1.2em; color: var(--rec); font-size: 14px; font-weight: 500; }
+#msg:empty { display: none; }
+
+.spinner { width: 44px; height: 44px; margin: 4px auto; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .08);
+           border-top-color: #4cc9f0; border-right-color: #7b61ff; animation: spin .9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }

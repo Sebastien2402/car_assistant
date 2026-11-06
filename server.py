@@ -117,15 +117,23 @@ def transcribe(audio):
     return " ".join(s.text.strip() for s in segments).strip()
 
 
-def synth_b64(text):
+synth_lock = threading.Lock()  # une seule synthèse Piper à la fois (dialogue et annonces de guidage)
+
+
+def synth_wav(text) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         path = f.name
     try:
-        _synth(_clean(text), path)
+        with synth_lock:
+            _synth(_clean(text), path)
         with open(path, "rb") as f:
-            return base64.b64encode(f.read()).decode("ascii")
+            return f.read()
     finally:
         os.remove(path)
+
+
+def synth_b64(text):
+    return base64.b64encode(synth_wav(text)).decode("ascii")
 
 
 # ---------- Un tour de dialogue, renvoyé en flux (une ligne JSON par événement) ----------
@@ -232,6 +240,15 @@ def reset():
     with turn_lock:
         brain = new_brain()
     return {"ok": True}
+
+
+@app.post("/api/tts", dependencies=[Depends(check)])
+def tts(text: str = Form(...)):
+    """Annonce de guidage lue par Piper, pour l'appli Android (sa vue web n'a pas de synthèse vocale)."""
+    text = _clean(text)[:300]
+    if not text:
+        raise HTTPException(status_code=400, detail="Texte vide")
+    return Response(synth_wav(text), media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/history", dependencies=[Depends(check)])
